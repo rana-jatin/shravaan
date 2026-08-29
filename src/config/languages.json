@@ -1,0 +1,42 @@
+{
+  "_comment": "The complete product language set. Derived from Bulbul v3 (TTS), NOT from Saaras (STT). Saaras hears 22 Indian languages; Bulbul speaks 10. Do not extend without an ADR. See docs/adr/0005-tts-provider-split.md",
+
+  "speakable": [
+    { "code": "hi-IN", "name": "Hindi", "endonym": "हिन्दी" },
+    { "code": "bn-IN", "name": "Bengali", "endonym": "বাংলা" },
+    { "code": "ta-IN", "name": "Tamil", "endonym": "தமிழ்" },
+    { "code": "te-IN", "name": "Telugu", "endonym": "తెలుగు" },
+    { "code": "gu-IN", "name": "Gujarati", "endonym": "ગુજરાતી" },
+    { "code": "kn-IN", "name": "Kannada", "endonym": "ಕನ್ನಡ" },
+    { "code": "ml-IN", "name": "Malayalam", "endonym": "മലയാളം" },
+    { "code": "mr-IN", "name": "Marathi", "endonym": "मराठी" },
+    { "code": "pa-IN", "name": "Punjabi", "endonym": "ਪੰਜਾਬੀ" },
+    { "code": "od-IN", "name": "Odia", "endonym": "ଓଡ଼ିଆ" },
+    { "code": "en-IN", "name": "English", "endonym": "English" }
+  ],
+
+  "_heard_not_speakable_comment": "Saaras transcribes these accurately. Nothing in the stack can speak them. Enumerated explicitly so the gate can tell 'out of scope' apart from 'unrecognised' — those deserve different responses.",
+  "heard_not_speakable": [
+    { "code": "ur-IN", "name": "Urdu" },
+    { "code": "as-IN", "name": "Assamese" },
+    { "code": "ne-IN", "name": "Nepali" },
+    { "code": "kok-IN", "name": "Konkani" },
+    { "code": "ks-IN", "name": "Kashmiri" },
+    { "code": "sd-IN", "name": "Sindhi" },
+    { "code": "sa-IN", "name": "Sanskrit" },
+    { "code": "sat-IN", "name": "Santali" },
+    { "code": "mni-IN", "name": "Manipuri" },
+    { "code": "brx-IN", "name": "Bodo" },
+    { "code": "mai-IN", "name": "Maithili" },
+    { "code": "doi-IN", "name": "Dogri" }
+  ],
+
+  "_refusal_ladder_comment": "Language to SPEAK a refusal in when we have no better signal. Hindi has the widest comprehension across the excluded set; en-IN is the final fallback. Must only ever contain speakable codes.",
+  "refusal_ladder": ["hi-IN", "en-IN"],
+
+  "_thresholds_comment": "Tolerance rules from docs/06-speakability-gate.md section 6. Asymmetric on purpose: mis-transcribing Hinglish as Hindi is a small error; refusing a Hindi speaker is a large one.",
+  "thresholds": {
+    "min_refusal_confidence": 0.75,
+    "switch_confirm_turns": 2
+  }
+}
