@@ -92,14 +92,15 @@ export class LlmDistiller implements Distiller {
         : "";
 
     let raw = "";
-    for await (const delta of this.#llm.stream(
+    for await (const chunk of this.#llm.stream(
       [
         { role: "system", content: SYSTEM },
         { role: "user", content: `${existingBlock}CONVERSATION:\n${transcript}` },
       ],
       { temperature: 0.2 },
     )) {
-      raw += delta;
+      // Distillation is prose-only; no tools are offered here.
+      if (chunk.type === "text") raw += chunk.text;
     }
 
     return parseDistillation(raw);

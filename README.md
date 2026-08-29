@@ -12,20 +12,21 @@ Start with [docs/01-architecture.md](docs/01-architecture.md).
 
 **Slice 1** (end-to-end exchange) · **Slice 2, server half** (echo guard) ·
 **Slice 3** (working memory) · **Slice 4** (continuity across days) ·
-**Slice 7** (speakability gate).
+**Slice 6** (tools and fillers) · **Slice 7** (speakability gate).
 See [docs/04-milestones.md](docs/04-milestones.md) for the full slice plan.
 
 | Built | Not yet |
 |---|---|
-| Device WebSocket transport | Tools and spoken fillers |
-| Sarvam ASR / LLM / TTS clients | **AEC (device side — needs hardware)** |
-| Turn state machine + barge-in | Wake word |
-| **Speakability gate — all three gates** | Deepgram Hindi ASR standby |
+| Device WebSocket transport | **AEC (device side — needs hardware)** |
+| Sarvam ASR / LLM / TTS clients | Wake word |
+| Turn state machine + barge-in | Deepgram Hindi ASR standby |
+| **Speakability gate — all three gates** | Degradation drills (slice 8) |
 | **Echo guard — the self-interruption defence** | **Durable memory backend ([ADR 0004](docs/adr/0004-vector-store.md) still Proposed)** |
 | **Working memory: 12-turn window, idle TTLs, turn lock, resume** | **A real multilingual embedder** |
 | **Long-term memory: `mem:writes`, distiller, supersede/soft-delete, profile** | |
+| **Tools: entitlement gating, deadlines, rotating fillers** | |
 | Clause chunker (streams TTS at clause boundaries) | |
-| Refusal copy in 11 languages | |
+| Spoken copy in 11 languages | |
 
 ---
 
@@ -151,12 +152,17 @@ product, so we speak the protocol directly.
 
 ## Known gaps in this code
 
-- **Refusal copy for 9 of 11 languages is placeholder text.** Only `en-IN` and
-  `hi-IN` are ready. The rest are flagged `needsNativeReview` and the server logs a
-  warning at boot. They must be replaced by native speakers before any user hears
-  them — see the header of `src/copy/refusals.ts`, which also explains the
-  grammatical-gender problem (Hindi, Marathi, Gujarati and Punjabi inflect the verb
-  for the *speaker's* gender, so the copy depends on which Bulbul voice is set).
+- **Spoken copy for 9 of 11 languages is placeholder text.** Only `en-IN` and
+  `hi-IN` are ready across refusals, fillers and tool fallbacks. The rest are
+  flagged `needsNativeReview` and the server logs a warning at boot. They must be
+  replaced by native speakers before any user hears them — see the header of
+  `src/copy/refusals.ts`, which also explains the grammatical-gender problem
+  (Hindi, Marathi, Gujarati and Punjabi inflect the verb for the *speaker's*
+  gender, so the copy depends on which Bulbul voice is set).
+- **Sarvam-105B's tool-calling is unverified.** [ADR 0003](docs/adr/0003-llm.md)
+  flagged that nothing in the docs describes its reliability. The parser assumes
+  an OpenAI-compatible `tool_calls` delta; if Sarvam diverges,
+  `src/providers/sarvam-llm.ts` is where it shows up.
 - **No device-side AEC yet — still use headphones.** The server-side echo guard is
   built and defends in depth (suppression window, confirm-on-transcript, and
   self-text correlation, since our own voice comes back as *our own words*). But

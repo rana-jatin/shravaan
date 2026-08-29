@@ -2,8 +2,8 @@
  * One conversation session. Owns turn state, the speakability gates, streaming
  * and barge-in.
  *
- * SCOPE — slices 1, 2 (server half), 3, 4 and 7. Deliberately NOT here:
- * tools, device-side AEC, wake word.
+ * SCOPE — slices 1, 2 (server half), 3, 4, 6 and 7. Deliberately NOT here:
+ * device-side AEC, wake word.
  *
  * The session PRODUCES memory events and CONSUMES a distilled profile; it never
  * queries long-term memory itself. Distillation lives in the worker, off the turn
@@ -18,18 +18,22 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/env.ts";
 import { resolveCopy } from "../copy/refusals.ts";
+import { resolveFallback, resolveFiller } from "../copy/fillers.ts";
 import { blocksLlm, endsSession, gate1PreConnect, gate2FirstDetection, gate3Switch } from "../domain/gate.ts";
 import { ClauseChunker } from "../domain/clause-chunker.ts";
 import { EchoGuard } from "../domain/echo-guard.ts";
 import { normalizeLanguage } from "../domain/languages.ts";
 import { transition } from "../domain/turn-state.ts";
 import { TURN_WINDOW } from "../domain/redis-keys.ts";
-import type { GateDecision, LanguageCode, MemWriteEvent, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
+import type { GateDecision, JsonContext, LanguageCode, MemWriteEvent, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
 import { SarvamAsr } from "../providers/sarvam-asr.ts";
-import { SarvamLlm, RateLimitError } from "../providers/sarvam-llm.ts";
+import { SarvamLlm, RateLimitError, type ChatMessage } from "../providers/sarvam-llm.ts";
 import { SarvamTts } from "../providers/sarvam-tts.ts";
 import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
 import type { MemWriteStream } from "../memory/stream.ts";
+import { ToolExecutor } from "../tools/executor.ts";
+import type { ToolRegistry } from "../tools/registry.ts";
+import type { ToolResult } from "../tools/types.ts";
 
 export type DeviceLink = {
   sendAudio(pcm: Buffer): void;
@@ -48,8 +52,18 @@ export type SessionDeps = {
   memStream?: MemWriteStream | undefined;
   profile?: Profile | undefined;
   localeHint?: LanguageCode | undefined;
+  /** Tools this deployment offers. Entitlement-filtered per user at offer time. */
+  tools?: ToolRegistry | undefined;
+  /** Fetches JSON context from our backend. Read-only to the agent. */
+  fetchContext?: ((uid: string) => Promise<JsonContext | null>) | undefined;
   log?: (level: string, msg: string, extra?: Record<string, unknown>) => void;
 };
+
+/**
+ * Bounded so a model that keeps calling tools cannot hold a live conversation
+ * open indefinitely. The user is waiting in real time.
+ */
+const MAX_TOOL_ROUNDS = 3;
 
 const SYSTEM_PROMPT = [
   "You are a warm, attentive companion. Keep replies short and conversational —",
@@ -74,6 +88,11 @@ export class Session {
   readonly #chunker = new ClauseChunker();
   readonly #echo: EchoGuard;
   readonly #store: SessionStore;
+  readonly #tools: ToolRegistry | null;
+  readonly #executor: ToolExecutor | null;
+  /** Read-only backend data. NOT memory — see docs/01-architecture.md section 1. */
+  #jsonContext: JsonContext | null = null;
+  #fillerIndex = 0;
   #turnAbort: AbortController | null = null;
   #firstDetectionDone = false;
   #closed = false;
@@ -86,6 +105,24 @@ export class Session {
     this.#llm = new SarvamLlm(deps.cfg);
     this.#echo = new EchoGuard(deps.cfg.echoGuard);
     this.#store = deps.store ?? new NullSessionStore();
+    this.#tools = deps.tools ?? null;
+    this.#executor = this.#tools
+      ? new ToolExecutor({
+          registry: this.#tools,
+          uid: deps.uid,
+          sid: this.sid,
+          speakFiller: (lang) => {
+            // Fillers rotate so a companion that waits often does not sound
+            // like a loop.
+            this.#emitToTts(resolveFiller(lang, this.#fillerIndex++));
+            this.#tts?.flush();
+          },
+          invalidateContext: async () => {
+            await this.#store.invalidateContext(deps.uid);
+          },
+          ...(deps.log ? { log: deps.log } : {}),
+        })
+      : null;
 
     const now = new Date().toISOString();
     const seed = this.#resolveSeed();
@@ -166,6 +203,14 @@ export class Session {
     try {
       const ctx = await this.#store.loadForTurn(this.sid, this.#d.uid, TURN_WINDOW);
       if (ctx.profile) this.#profile = ctx.profile;
+
+      // JSON context: cached copy first, backend on a miss. Fetched once at
+      // session open and refreshed only when a tool mutates it.
+      this.#jsonContext = await this.#store.loadContext(this.#d.uid);
+      if (!this.#jsonContext) {
+        this.#jsonContext = await this.#fetchContext();
+        if (this.#jsonContext) await this.#store.saveContext(this.#jsonContext);
+      }
 
       if (ctx.state) {
         this.#state = ctx.state;
@@ -308,6 +353,9 @@ export class Session {
     this.#apply({ type: "speech_start" });
     this.#turnAbort?.abort();
     this.#chunker.reset();
+    // Abandon in-flight tools too. A pending entry that outlives the turn makes
+    // the agent claim it is still working on something the user interrupted.
+    void this.#executor?.clearAll();
     this.#echo.onPlaybackEnd();
     this.#d.device.sendControl({ type: "clear_audio" });
     this.#log("info", "barge-in", { trigger });
@@ -390,7 +438,7 @@ export class Session {
    * user produces a mixed window, and the model should see that rather than a
    * flattened single value (docs/02-data-contracts.md section 2.4).
    */
-  #buildMessages(userText: string): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  #buildMessages(userText: string): ChatMessage[] {
     const history = [...this.#turns]
       .reverse()
       .filter((t) => t.text.trim() !== "")
@@ -539,16 +587,64 @@ export class Session {
     let spokeAnything = false;
     let failure: unknown = null;
 
+    const speak = (text: string) => {
+      for (const chunk of this.#chunker.push(text)) {
+        if (!spokeAnything) {
+          this.#apply({ type: "first_clause_ready" });
+          spokeAnything = true;
+        }
+        this.#emitToTts(chunk);
+      }
+    };
+
     try {
-      for await (const delta of this.#llm.stream(messages, { signal: abort.signal })) {
-        if (abort.signal.aborted) break;
-        reply += delta;
-        for (const chunk of this.#chunker.push(delta)) {
-          if (!spokeAnything) {
-            this.#apply({ type: "first_clause_ready" });
-            spokeAnything = true;
+      // Tool rounds. Bounded so a model that keeps calling tools cannot hold the
+      // conversation open indefinitely — the user is waiting in real time.
+      for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        const calls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
+        let roundText = "";
+
+        const offered =
+          this.#tools && round < MAX_TOOL_ROUNDS
+            ? this.#tools.schemasFor(this.#jsonContext)
+            : [];
+
+        for await (const chunk of this.#llm.stream(messages, {
+          signal: abort.signal,
+          ...(offered.length > 0 ? { tools: offered } : {}),
+        })) {
+          if (abort.signal.aborted) break;
+          if (chunk.type === "text") {
+            roundText += chunk.text;
+            reply += chunk.text;
+            speak(chunk.text);
+          } else {
+            calls.push({ id: chunk.id, name: chunk.name, args: chunk.args });
           }
-          this.#emitToTts(chunk);
+        }
+
+        if (abort.signal.aborted || calls.length === 0) break;
+
+        this.#apply({ type: "tool_dispatched" });
+        const results = await this.#runTools(calls, abort.signal);
+        this.#apply({ type: "tool_result" });
+        if (abort.signal.aborted) break;
+
+        messages.push({
+          role: "assistant",
+          content: roundText,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: "function",
+            function: { name: c.name, arguments: JSON.stringify(c.args) },
+          })),
+        });
+        for (const r of results) {
+          messages.push({
+            role: "tool",
+            tool_call_id: r.call_id,
+            content: JSON.stringify(r.ok ? r.data : { error: r.error.code }),
+          });
         }
       }
 
@@ -594,6 +690,57 @@ export class Session {
         });
       }
       this.#apply({ type: "playback_drained" });
+    }
+  }
+
+  /**
+   * Run a round of tool calls.
+   *
+   * A failed tool is SPOKEN, not swallowed: the user asked for something and is
+   * owed an answer either way. The fallback is resolved per language so an
+   * English error string never reaches a Hindi voice.
+   */
+  async #runTools(
+    calls: Array<{ id: string; name: string; args: Record<string, unknown> }>,
+    signal: AbortSignal,
+  ): Promise<ToolResult[]> {
+    if (!this.#executor) return [];
+
+    const results: ToolResult[] = [];
+    for (const c of calls) {
+      const result = await this.#executor.execute(
+        { call_id: c.id, name: c.name, args: c.args },
+        { language: this.#state.language, jsonContext: this.#jsonContext, signal },
+      );
+      results.push(result);
+
+      this.#state.last_tool = c.name;
+      if (result.ok) {
+        this.#log("info", "tool ok", { tool: c.name, ms: result.elapsed_ms });
+        if (result.context_mutated) this.#jsonContext = await this.#fetchContext();
+      } else {
+        this.#log("warn", "tool failed", {
+          tool: c.name,
+          code: result.error.code,
+          ms: result.elapsed_ms,
+        });
+        this.#emitToTts(resolveFallback(result.error.spoken_fallback_key, this.#state.language));
+      }
+    }
+    return results;
+  }
+
+  async #fetchContext(): Promise<JsonContext | null> {
+    if (!this.#d.fetchContext) return null;
+    try {
+      return await this.#d.fetchContext(this.#d.uid);
+    } catch (err) {
+      // Without context, entitlement-gated tools are withheld rather than
+      // offered unverified. Fewer capabilities beats phantom ones.
+      this.#log("warn", "json context fetch failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
     }
   }
 

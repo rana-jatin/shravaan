@@ -28,6 +28,8 @@ import { HashingEmbedder } from "./memory/long-term-store.ts";
 import { LlmDistiller } from "./memory/distiller.ts";
 import { MemoryWorker } from "./memory/worker.ts";
 import { SarvamLlm } from "./providers/sarvam-llm.ts";
+import { ToolRegistry } from "./tools/registry.ts";
+import { pendingCopyReview } from "./copy/fillers.ts";
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}): void {
   const line = { t: new Date().toISOString(), level, msg, ...extra };
@@ -47,11 +49,14 @@ export function start(): ServerHandle {
 
   const cfg = loadConfig();
 
-  const pending = pendingNativeReview();
+  const pending = [
+    ...pendingNativeReview().map((p) => p.language),
+    ...pendingCopyReview().map((p) => p.language),
+  ];
   if (pending.length > 0) {
-    log("warn", "refusal copy pending native review — do not ship to users", {
-      count: pending.length,
-      languages: [...new Set(pending.map((p) => p.language))],
+    log("warn", "spoken copy pending native review — do not ship to users", {
+      entries: pending.length,
+      languages: [...new Set(pending)],
     });
   }
 
@@ -82,6 +87,11 @@ export function start(): ServerHandle {
     note: "facts and episodes are lost on restart; see docs/adr/0004-vector-store.md",
     embedder: "HashingEmbedder (lexical only — no cross-lingual matching)",
   });
+
+  // Tools are deployment-specific. Register them here; entitlement filtering and
+  // deadlines are handled by the registry and executor. An empty registry means
+  // the model is simply offered no tools.
+  const tools = new ToolRegistry();
 
   const wss = new WebSocketServer({ port: cfg.port });
   log("info", "listening", {
@@ -114,6 +124,9 @@ export function start(): ServerHandle {
           cfg,
           store,
           memStream,
+          tools,
+          // fetchContext: wire your backend here. Without it, entitlement-gated
+          // tools are withheld rather than offered unverified.
           uid: String(msg["uid"] ?? "anonymous"),
           // A device reconnecting with its previous sid resumes that thread,
           // provided the idle window has not lapsed.

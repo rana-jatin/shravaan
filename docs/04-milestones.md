@@ -226,6 +226,26 @@ provider failover.
 **Exit:** happy path, timeout path and not-entitled path all demoed. The failure paths matter
 more than the success — check that `pending` is cleared in every case.
 
+**Built.** Registry with entitlement filtering, executor with per-call deadlines, rotating
+fillers and per-language fallbacks. Three behaviours are worth naming because they are easy
+to implement backwards:
+
+- **Entitlement gates offering, not just execution.** The tool list handed to the model is
+  filtered *before* it sees it — a model that cannot see a tool cannot propose it. It is
+  re-checked at execution anyway, since context can go stale mid-session.
+- **`pending` is cleared on every path** — success, timeout, thrown handler, unknown tool,
+  refused entitlement, and barge-in. There is a parameterised test per path. A stale entry
+  is what makes an agent insist it is still working on something it abandoned.
+- **The filler fires on a timer, not on dispatch.** Speaking "one moment" immediately would
+  make every fast tool feel slow. Variants rotate so a companion that waits often does not
+  sound like a loop.
+
+**Still unverified: Sarvam-105B's tool-calling itself.** [ADR 0003](adr/0003-llm.md) records
+that nothing in the documentation describes its reliability, and named this slice as the
+real test. The parser assumes an OpenAI-compatible `tool_calls` delta; if Sarvam diverges,
+`src/providers/sarvam-llm.ts` is where it surfaces, and the honest fallback is an external
+LLM with the residency cost that implies.
+
 ---
 
 ## Slice 7 — The speakability gate
