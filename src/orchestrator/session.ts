@@ -17,6 +17,7 @@ import type { Config } from "../config/env.ts";
 import { resolveCopy } from "../copy/refusals.ts";
 import { blocksLlm, endsSession, gate1PreConnect, gate2FirstDetection, gate3Switch } from "../domain/gate.ts";
 import { ClauseChunker } from "../domain/clause-chunker.ts";
+import { EchoGuard } from "../domain/echo-guard.ts";
 import { normalizeLanguage } from "../domain/languages.ts";
 import { transition } from "../domain/turn-state.ts";
 import type { GateDecision, LanguageCode, Profile, SessionState, TurnPhase } from "../domain/types.ts";
@@ -55,6 +56,7 @@ export class Session {
   #tts: SarvamTts | null = null;
   readonly #llm: SarvamLlm;
   readonly #chunker = new ClauseChunker();
+  readonly #echo: EchoGuard;
   #turnAbort: AbortController | null = null;
   #firstDetectionDone = false;
   #closed = false;
@@ -64,6 +66,7 @@ export class Session {
   constructor(deps: SessionDeps) {
     this.#d = deps;
     this.#llm = new SarvamLlm(deps.cfg);
+    this.#echo = new EchoGuard(deps.cfg.echoGuard);
 
     const now = new Date().toISOString();
     const seed = this.#resolveSeed();
@@ -128,6 +131,7 @@ export class Session {
     });
 
     asr.on("speech_start", () => this.#onSpeechStart());
+    asr.on("partial", (t) => this.#onPartial(t.text));
     asr.on("final", (t) => void this.#onFinal(t.text, t.language, t.languageProbability));
     asr.on("error", (e) => this.#log("error", "asr", { err: e.message }));
     asr.on("close", ({ code }) => {
@@ -144,8 +148,16 @@ export class Session {
       speaker: this.#d.cfg.ttsSpeaker,
       pace: this.#d.cfg.ttsPace,
     });
-    tts.on("audio", (buf) => this.#d.device.sendAudio(buf));
-    tts.on("done", () => this.#apply({ type: "playback_drained" }));
+    tts.on("audio", (buf) => {
+      // First audio of a reply starts the echo suppression window — the clock
+      // begins when sound leaves for the device, not when the LLM finished.
+      if (!this.#echo.isSpeaking) this.#echo.onPlaybackStart();
+      this.#d.device.sendAudio(buf);
+    });
+    tts.on("done", () => {
+      this.#echo.onPlaybackEnd();
+      this.#apply({ type: "playback_drained" });
+    });
     tts.on("error", (e) => this.#log("error", "tts", { err: e.message }));
     tts.connect();
     this.#tts = tts;
@@ -157,19 +169,54 @@ export class Session {
   }
 
   /**
-   * Barge-in. Driven by vad.speech_start — never by transcript.final, which
-   * arrives far too late to feel like an interruption.
+   * Barge-in, stage one. Driven by vad.speech_start — never by transcript.final,
+   * which arrives far too late to feel like an interruption.
+   *
+   * A bare VAD trigger is NOT sufficient while we are speaking: on an open-air
+   * device it is as likely to be our own voice as the user's. The echo guard
+   * decides, and by default defers to a transcript.
    */
   #onSpeechStart(): void {
-    const wasSpeaking = this.#phase === "speaking";
-    const t = this.#apply({ type: "speech_start" });
-
-    if (t.flushPlayback || wasSpeaking) {
-      this.#turnAbort?.abort();
-      this.#chunker.reset();
-      this.#d.device.sendControl({ type: "clear_audio" });
-      this.#log("info", "barge-in");
+    if (!this.#echo.isSpeaking) {
+      this.#apply({ type: "speech_start" });
+      return;
     }
+
+    const d = this.#echo.onSpeechStart();
+    if (!d.accept) {
+      this.#log("debug", "barge-in withheld", { reason: d.reason, detail: d.detail });
+      return;
+    }
+    this.#commitBargeIn("vad");
+  }
+
+  /**
+   * Barge-in, stage two — and where echo is actually caught. Our own voice
+   * returns as our own words, which is a signal no energy-based method has.
+   */
+  #onPartial(text: string): void {
+    if (!this.#echo.isSpeaking) return;
+
+    const d = this.#echo.onPartial(text);
+    if (!d.accept) {
+      if (d.reason === "self_echo") {
+        this.#log("warn", "self-echo rejected — AEC is leaking", {
+          detail: d.detail,
+          heard: text.slice(0, 60),
+        });
+      }
+      return;
+    }
+    this.#commitBargeIn("partial");
+  }
+
+  #commitBargeIn(trigger: "vad" | "partial"): void {
+    this.#apply({ type: "speech_start" });
+    this.#turnAbort?.abort();
+    this.#chunker.reset();
+    this.#echo.onPlaybackEnd();
+    this.#d.device.sendControl({ type: "clear_audio" });
+    this.#log("info", "barge-in", { trigger });
   }
 
   async #onFinal(text: string, detected?: string, confidence?: number): Promise<void> {
@@ -272,7 +319,7 @@ export class Session {
             this.#apply({ type: "first_clause_ready" });
             spokeAnything = true;
           }
-          this.#tts?.speak(chunk);
+          this.#emitToTts(chunk);
         }
       }
       if (abort.signal.aborted) return;
@@ -280,7 +327,7 @@ export class Session {
       const tail = this.#chunker.flush();
       if (tail) {
         if (!spokeAnything) this.#apply({ type: "first_clause_ready" });
-        this.#tts?.speak(tail);
+        this.#emitToTts(tail);
       }
       this.#tts?.flush();
     } catch (err) {
@@ -297,8 +344,18 @@ export class Session {
 
   #speak(text: string): void {
     this.#apply({ type: "first_clause_ready" });
-    this.#tts?.speak(text);
+    this.#emitToTts(text);
     this.#tts?.flush();
+  }
+
+  /**
+   * Every outgoing chunk is also recorded with the echo guard. That record is
+   * the correlation reference that lets us recognise our own voice if it comes
+   * back through the microphone.
+   */
+  #emitToTts(text: string): void {
+    this.#echo.onSpeakText(text);
+    this.#tts?.speak(text);
   }
 
   /**

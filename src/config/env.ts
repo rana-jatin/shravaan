@@ -79,6 +79,22 @@ export function loadConfig() {
      */
     asrAutodetectToken: opt("ASR_AUTODETECT_TOKEN", "unknown"),
 
+    /**
+     * Echo guard. NOT a substitute for device-side AEC — the second layer that
+     * catches what leaks through. See docs/adr/0007-audio-front-end.md
+     *
+     * Defaults are deliberately conservative: a bot that occasionally misses an
+     * interruption is tolerable, one that interrupts itself is unusable. Tune
+     * toward sensitivity only once AEC is measured on real hardware.
+     */
+    echoGuard: {
+      suppressionWindowMs: num("ECHO_SUPPRESSION_MS", 400),
+      requireTranscript: opt("ECHO_REQUIRE_TRANSCRIPT", "true") !== "false",
+      selfEchoThreshold: num("ECHO_SELF_THRESHOLD", 0.6),
+      /** Emergency fallback from ADR 0007: mutes barge-in entirely. */
+      halfDuplex: opt("HALF_DUPLEX", "false") === "true",
+    },
+
     port: num("PORT", 8080),
     logLevel: opt("LOG_LEVEL", "info"),
   };

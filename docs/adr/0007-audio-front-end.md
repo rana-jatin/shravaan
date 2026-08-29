@@ -31,7 +31,36 @@ Both are correct advice. Both assume the signal reaching the ASR contains only t
 
 ## Decision
 
-**Split the audio front-end by what each side can actually see.**
+**Split the audio front-end by what each side can actually see — and defend in
+depth, because AEC leaks.**
+
+### Two layers, not one
+
+AEC alone is not a sufficient answer. Cancellation is never perfect, and it
+degrades with volume, room acoustics and speaker placement — exactly the
+variables we control least. So the design carries a **second, server-side layer**
+that costs nothing and catches what leaks through:
+
+| Layer | Where | Mechanism |
+|---|---|---|
+| **1. AEC** | Device | Subtract the playback signal, sample-aligned |
+| **2. Echo guard** | Server | Suppression window · confirm-on-transcript · **self-text correlation** |
+
+The third of those is the interesting one. **Echo transcribes as our own words** —
+a signal no energy-based method has access to. If the incoming partial's tokens
+substantially overlap what we are currently saying, it is our voice, not the
+user's. Cheap, provider-agnostic, and it catches leakage the other two miss.
+
+Confirm-on-transcript also implements both providers' own stated reasoning:
+Deepgram prefers `StartOfTurn` over an external VAD precisely because it is
+"guaranteed to contain a non-empty transcript", and Sarvam says to drive barge-in
+off `vad.speech_start` **or early partials**. A bare VAD trigger is never enough
+while we are speaking.
+
+Implemented in `src/domain/echo-guard.ts`; the loop it prevents is reproduced
+under test in `test/echo-guard.test.ts`.
+
+### Where each function lives
 
 | Function | Where | Why |
 |---|---|---|
@@ -94,7 +123,13 @@ intermittent — it depends on volume, room acoustics and what is being said.
 echo self-interrupts. Too insensitive: real interruptions are missed and the bot talks over
 the user. The safe default early is **less sensitive** — a bot that occasionally misses an
 interruption is tolerable; one that interrupts itself is unusable. Tune toward sensitivity
-only once AEC is measured.
+only once AEC is measured. The knobs are `ECHO_SUPPRESSION_MS`, `ECHO_REQUIRE_TRANSCRIPT`
+and `ECHO_SELF_THRESHOLD`.
+
+**`self_echo` rejections are a diagnostic, not just a defence.** The server logs a warning
+whenever correlation fires, because a rising rate means **AEC is degrading**. It is the only
+visibility we have into cancellation quality without instrumenting the device, and it should
+be a monitored metric rather than a log line nobody reads.
 
 **We inherit no provider defaults.** Sarvam publishes none for `threshold`,
 `silence_duration_ms` or `min_speech_duration_ms`, exposing them in its own product only as

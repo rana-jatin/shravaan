@@ -64,21 +64,36 @@ The audio front-end. Highest technical risk in the project, taken second.
 **Demo:** hold a multi-turn Hindi conversation on a device with an open speaker, no
 headphones. Interrupt the bot mid-sentence; it stops immediately and listens.
 
-**Scope:**
-- AEC with the playback bus as reference
-- Local VAD as a transmit gate only — endpointing stays server-side
+**Scope splits by what needs hardware.** The server half is buildable and testable now;
+the device half is not.
+
+*Server side — built:*
+- **Echo guard** (`src/domain/echo-guard.ts`): suppression window, confirm-on-transcript,
+  and **self-text correlation** — echo transcribes as *our own words*, a signal no
+  energy-based method has
 - Barge-in per Sarvam's documented rule: trigger on `vad.speech_start` or early partials,
   **never** on `transcript.final`
 - A `clear_audio` control message that flushes the device playback buffer
 - Orchestrator turn state through `Speaking → Interrupted → UserSpeaking`
+- Half-duplex emergency fallback behind a flag ([ADR 0007](adr/0007-audio-front-end.md))
+- The self-interruption loop reproduced under test, including the ten-turn criterion
+
+*Device side — pending hardware:*
+- AEC with the playback bus as reference
+- Local VAD as a transmit gate only — endpointing stays server-side
 - Target hardware, or a representative stand-in
 
 **Deliberately does not:** persist state · remember across sessions · switch language ·
 call tools · handle provider failure · use a wake word.
 
-**Exit:** ten consecutive turns on open-air audio with **zero self-interruptions**. That
-number is the actual acceptance criterion — echo leakage is intermittent, so a single clean
-run proves nothing.
+**Exit:** ten consecutive turns on open-air audio with **zero self-interruptions**, *and*
+a genuine interruption accepted on each of those ten. That pairing is the real criterion —
+a guard that never self-interrupts because it has gone deaf is not a passing result. Echo
+leakage is intermittent, so a single clean run proves nothing either way.
+
+Both halves of that criterion are asserted in `test/echo-guard.test.ts` against simulated
+leakage. **Simulation is not the exit** — it proves the logic, not the acoustics. The
+criterion is met on hardware, in a room.
 
 ---
 

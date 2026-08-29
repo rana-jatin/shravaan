@@ -10,17 +10,19 @@ Start with [docs/01-architecture.md](docs/01-architecture.md).
 
 ## Status
 
-**Slice 1 (thinnest end-to-end exchange) + Slice 7 (the speakability gate).**
+**Slice 1** (thinnest end-to-end exchange) · **Slice 7** (speakability gate) ·
+**Slice 2, server half** (echo guard + barge-in).
 See [docs/04-milestones.md](docs/04-milestones.md) for the full slice plan.
 
 | Built | Not yet |
 |---|---|
 | Device WebSocket transport | Redis working memory |
 | Sarvam ASR / LLM / TTS clients | Long-term memory + `mem:writes` worker |
-| Turn state machine + barge-in signalling | Tools and spoken fillers |
-| **Speakability gate — all three gates** | Acoustic echo cancellation (device side) |
-| Clause chunker (streams TTS at clause boundaries) | Wake word |
-| Refusal copy in 11 languages | Deepgram Hindi ASR standby |
+| Turn state machine + barge-in | Tools and spoken fillers |
+| **Speakability gate — all three gates** | **AEC (device side — needs hardware)** |
+| **Echo guard — the self-interruption defence** | Wake word |
+| Clause chunker (streams TTS at clause boundaries) | Deepgram Hindi ASR standby |
+| Refusal copy in 11 languages | |
 
 ---
 
@@ -139,11 +141,17 @@ product, so we speak the protocol directly.
   them — see the header of `src/copy/refusals.ts`, which also explains the
   grammatical-gender problem (Hindi, Marathi, Gujarati and Punjabi inflect the verb
   for the *speaker's* gender, so the copy depends on which Bulbul voice is set).
-- **No AEC.** Use headphones. On an open-air device the microphone hears the
-  speaker, the ASR transcribes our own output, and the agent interrupts itself in a
-  loop. This is the highest technical risk in the project and it is
-  [Slice 2](docs/04-milestones.md#slice-2--speaker-and-microphone-in-the-same-room).
-  ([ADR 0007](docs/adr/0007-audio-front-end.md))
+- **No device-side AEC yet — still use headphones.** The server-side echo guard is
+  built and defends in depth (suppression window, confirm-on-transcript, and
+  self-text correlation, since our own voice comes back as *our own words*). But
+  it is the second layer, not the first. Acoustic echo cancellation belongs on the
+  device where the playback signal is available sample-aligned, and that needs
+  hardware. Until then the guard is catching leakage from a canceller that does
+  not exist. ([ADR 0007](docs/adr/0007-audio-front-end.md))
+  - Watch for `self-echo rejected — AEC is leaking` in the logs: a rising rate is
+    the only visibility we have into cancellation quality.
+  - `HALF_DUPLEX=true` mutes barge-in entirely — the emergency fallback if AEC
+    proves intractable. It is a product downgrade, not a fix.
 - **No memory.** Every session starts cold. Slices 3 and 4.
 - **Latency is unmeasured.** The budget in
   [docs/03-latency-budget.md](docs/03-latency-budget.md) is hypotheses with named
