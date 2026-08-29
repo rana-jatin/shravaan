@@ -9,21 +9,23 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { WebSocketServer } from "ws";
+import type { ServerHandle } from "../src/server.ts";
 
 const PORT = 18099;
-let wss: WebSocketServer;
+let handle: ServerHandle;
 
 describe("device transport", () => {
   before(async () => {
     process.env["SARVAM_API_KEY"] = "test-key-not-used-for-network-calls";
     process.env["PORT"] = String(PORT);
     const { start } = await import("../src/server.ts");
-    wss = start();
+    handle = start();
   });
 
   after(() => {
-    wss?.close();
+    // Must stop the memory worker as well, or its poll loop keeps the test
+    // process alive forever.
+    handle?.shutdown();
   });
 
   it("accepts a device and returns a session id", async () => {

@@ -156,6 +156,24 @@ support deletion requests · switch language · call tools.
 correction on day three that supersedes rather than contradicts. Verify the supersede chain
 in the store directly — not just in what the bot says.
 
+**Built, with the durable backend still open.** The pipeline is complete and tested:
+`mem:writes` producer and consumer, the distiller, supersede/soft-delete semantics, salience
+decay, profile building with caps, and the warm-into-Redis path. Three things are
+deliberately provisional:
+
+- **The store is in-process.** [ADR 0004](adr/0004-vector-store.md) is still *Proposed*, so
+  nothing durable is wired. Facts and episodes are lost on restart, and the server logs a
+  warning saying so at boot.
+- **The embedder is lexical.** `HashingEmbedder` cannot match across scripts, which is
+  exactly the failure a real multilingual model has to fix. A test asserts that limitation
+  rather than hiding it.
+- **The idempotency ledger is in-process**, so the worker is single-replica only
+  ([Q6b](05-open-questions.md)).
+
+What is *not* provisional is the judgement layer: distillation prompts, the
+contradiction-becomes-supersede rule, reinforcement over duplication, and the profile caps.
+Those are backend-independent and are where the product actually lives.
+
 ---
 
 ## Slice 5 — Free language switching

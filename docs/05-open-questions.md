@@ -137,6 +137,24 @@ Deepgram by contrast publishes exact ranges and defaults for all three Flux para
 
 ---
 
+### Q6b. Where does the memory worker's idempotency ledger live?
+
+**Why it matters.** `mem:writes` is at-least-once, so the worker dedupes on
+`event_id`. That ledger is currently **in-process**, which is correct for one
+replica and wrong for two: a second worker would not see the first's history, and
+duplicated facts in a companion read as the bot repeating itself.
+
+**Not a provider question — ours.** The fix is a Redis `SET`/`SETNX` keyed on
+`event_id` with a TTL comfortably longer than the retry window. Needed before the
+worker is ever run with more than one replica, and worth deciding before that
+happens accidentally.
+
+**Related:** an embedding model must also be chosen before retrieval is trusted.
+The current `HashingEmbedder` is lexical only — it cannot match "They live in
+Bengaluru" against "वे बेंगलुरु में रहते हैं", and our facts are multilingual by
+construction. There is a test asserting that failure so it stays visible.
+See [ADR 0004](adr/0004-vector-store.md).
+
 ### Q7. Does `mem:writes` get buffered during a Redis outage, or is the gap accepted?
 
 **Why it matters.** Not a provider question — ours. Under strong continuity, dropping the

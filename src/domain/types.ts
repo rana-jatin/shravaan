@@ -137,6 +137,89 @@ export type Profile = {
 };
 
 // ---------------------------------------------------------------------------
+// Long-term memory — docs/02-data-contracts.md sections 3 and 4
+// ---------------------------------------------------------------------------
+
+export type MemWriteKind = "turn_completed" | "session_closed" | "explicit_recall" | "correction";
+
+export type MemWriteEvent = {
+  /** ULID. Idempotency key — streams are at-least-once. */
+  event_id: string;
+  sid: string;
+  uid: string;
+  tid: number;
+  at: Iso8601;
+  kind: MemWriteKind;
+
+  user_text?: string;
+  agent_text?: string;
+  language?: LanguageCode;
+
+  turn_count?: number;
+  duration_s?: number;
+
+  /** Present on `correction`: the user contradicted a stored fact. */
+  supersedes_fact_id?: string;
+
+  /** Signals for distillation priority, not conclusions. */
+  hints?: {
+    named_entities?: string[];
+    stated_preference?: boolean;
+    emotional_salience?: "low" | "medium" | "high";
+  };
+};
+
+export type FactKind =
+  | "preference"
+  | "biographical"
+  | "relationship"
+  | "commitment"
+  | "aversion";
+
+export type Fact = {
+  id: string;
+  uid: string;
+  /** Canonical, first person about the user. */
+  text: string;
+  embedding: number[];
+  kind: FactKind;
+  /** 0..1, decays without reinforcement. */
+  salience: number;
+  confidence: number;
+  first_seen: Iso8601;
+  last_reinforced: Iso8601;
+
+  /** Supersede chain — new facts do not delete old ones. */
+  supersedes: string | null;
+  superseded_by: string | null;
+  /** Soft delete. Never hard-delete: the log must stay explicable. */
+  deleted_at: Iso8601 | null;
+  deleted_reason: "superseded" | "user_requested" | "low_confidence" | null;
+
+  /** Provenance, so any fact traces back to the turn that produced it. */
+  source_event_id: string;
+  source_sid: string;
+};
+
+export type Episode = {
+  id: string;
+  uid: string;
+  sid: string;
+  started_at: Iso8601;
+  ended_at: Iso8601;
+  turn_count: number;
+  /** Every language observed in the session. */
+  languages: LanguageCode[];
+  summary: string;
+  topics: string[];
+  /** Threads left open — seeds the next session's greeting. */
+  open_threads: Array<{ id: string; text: string }>;
+  /** Join key back to the semantic store. */
+  fact_ids: string[];
+  mood?: "positive" | "neutral" | "negative" | "mixed";
+};
+
+// ---------------------------------------------------------------------------
 // Turn state machine — docs/01-architecture.md section 4
 // ---------------------------------------------------------------------------
 

@@ -2,9 +2,12 @@
  * One conversation session. Owns turn state, the speakability gates, streaming
  * and barge-in.
  *
- * SCOPE — slices 1, 2 (server half), 3 and 7. Deliberately NOT here:
- * long-term memory, the mem:writes worker, tools, device-side AEC, wake word.
- * See docs/04-milestones.md
+ * SCOPE — slices 1, 2 (server half), 3, 4 and 7. Deliberately NOT here:
+ * tools, device-side AEC, wake word.
+ *
+ * The session PRODUCES memory events and CONSUMES a distilled profile; it never
+ * queries long-term memory itself. Distillation lives in the worker, off the turn
+ * path (src/memory/worker.ts). See docs/04-milestones.md
  *
  * BARGE-IN follows Sarvam's own documented rule: trigger on vad.speech_start or
  * early partials, NEVER on transcript.final. Note their guidance assumes a
@@ -21,11 +24,12 @@ import { EchoGuard } from "../domain/echo-guard.ts";
 import { normalizeLanguage } from "../domain/languages.ts";
 import { transition } from "../domain/turn-state.ts";
 import { TURN_WINDOW } from "../domain/redis-keys.ts";
-import type { GateDecision, LanguageCode, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
+import type { GateDecision, LanguageCode, MemWriteEvent, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
 import { SarvamAsr } from "../providers/sarvam-asr.ts";
 import { SarvamLlm, RateLimitError } from "../providers/sarvam-llm.ts";
 import { SarvamTts } from "../providers/sarvam-tts.ts";
 import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
+import type { MemWriteStream } from "../memory/stream.ts";
 
 export type DeviceLink = {
   sendAudio(pcm: Buffer): void;
@@ -40,6 +44,8 @@ export type SessionDeps = {
   /** Resume an existing session within its idle window. Omit to start fresh. */
   sid?: string | undefined;
   store?: SessionStore | undefined;
+  /** Fire-and-forget memory writes. Omit to run without long-term memory. */
+  memStream?: MemWriteStream | undefined;
   profile?: Profile | undefined;
   localeHint?: LanguageCode | undefined;
   log?: (level: string, msg: string, extra?: Record<string, unknown>) => void;
@@ -60,6 +66,8 @@ export class Session {
   /** Newest-first window, mirroring the Redis list. */
   #turns: Turn[] = [];
   #resumed = false;
+  /** Warmed from the store at session open; the only long-term memory on the turn path. */
+  #profile: Profile | null = null;
   #asr: SarvamAsr | null = null;
   #tts: SarvamTts | null = null;
   readonly #llm: SarvamLlm;
@@ -153,8 +161,11 @@ export class Session {
    * is the specified trade (docs/01-architecture.md section 6).
    */
   async #restore(): Promise<void> {
+    this.#profile = this.#d.profile ?? null;
+
     try {
       const ctx = await this.#store.loadForTurn(this.sid, this.#d.uid, TURN_WINDOW);
+      if (ctx.profile) this.#profile = ctx.profile;
 
       if (ctx.state) {
         this.#state = ctx.state;
@@ -170,8 +181,8 @@ export class Session {
       }
 
       // No stored state, but a profile may still seed the language.
-      if (ctx.profile?.preferred_language) {
-        const code = normalizeLanguage(ctx.profile.preferred_language);
+      if (this.#profile?.preferred_language) {
+        const code = normalizeLanguage(this.#profile.preferred_language);
         if (code) {
           this.#state.language = code;
           this.#state.language_source = "profile";
@@ -395,10 +406,69 @@ export class Session {
       history[history.length - 1]!.content === userText;
 
     return [
-      { role: "system" as const, content: SYSTEM_PROMPT },
+      { role: "system" as const, content: SYSTEM_PROMPT + this.#profileBlock() },
       ...history,
       ...(alreadyIncluded ? [] : [{ role: "user" as const, content: userText }]),
     ];
+  }
+
+  /**
+   * The only long-term memory on the turn path. Capped upstream in
+   * buildProfile(); this just renders it.
+   *
+   * Kept as a stable suffix on the system message so the prefix stays
+   * byte-identical across turns — Sarvam prices cached input at roughly a third
+   * of fresh input, which is only reachable if we do not churn the prefix.
+   */
+  #profileBlock(): string {
+    const p = this.#profile;
+    if (!p) return "";
+
+    const parts: string[] = [];
+    if (p.facts.length > 0) {
+      parts.push(`What you know about them:\n${p.facts.map((f) => `- ${f.text}`).join("\n")}`);
+    }
+    if (p.open_threads.length > 0) {
+      parts.push(
+        `Left unfinished last time:\n${p.open_threads.map((t) => `- ${t.text}`).join("\n")}`,
+      );
+    }
+    if (p.recent_episodes.length > 0) {
+      parts.push(`Recently:\n${p.recent_episodes.slice(0, 3).map((e) => `- ${e.summary}`).join("\n")}`);
+    }
+    if (parts.length === 0) return "";
+
+    return (
+      `\n\n${parts.join("\n\n")}\n\n` +
+      `Draw on this only when it is genuinely relevant. Do not recite it, and do not ` +
+      `open by listing what you remember — that is unsettling rather than warm.`
+    );
+  }
+
+  /**
+   * Fire-and-forget append to mem:writes.
+   *
+   * NEVER awaited on the turn path and never allowed to throw into it: a failure
+   * here degrades tomorrow's conversation, not today's turn. That asymmetry is
+   * the entire reason the seam exists.
+   */
+  #emitMemWrite(event: Omit<MemWriteEvent, "event_id" | "sid" | "uid" | "at">): void {
+    const stream = this.#d.memStream;
+    if (!stream) return;
+
+    const full: MemWriteEvent = {
+      event_id: randomUUID(),
+      sid: this.sid,
+      uid: this.#d.uid,
+      at: new Date().toISOString(),
+      ...event,
+    };
+
+    void stream.append(full).catch((err: unknown) => {
+      this.#log("warn", "mem:writes append failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   /**
@@ -412,7 +482,7 @@ export class Session {
         detected,
         confidence,
         seed: this.#state.language,
-        profileLanguage: this.#d.profile?.preferred_language,
+        profileLanguage: this.#profile?.preferred_language,
       });
       this.#log("info", "gate2", { detected, action: d.action });
 
@@ -427,7 +497,7 @@ export class Session {
       detected,
       confidence,
       state: this.#state,
-      profileLanguage: this.#d.profile?.preferred_language,
+      profileLanguage: this.#profile?.preferred_language,
     });
     this.#state.pending_switch = pending_switch;
 
@@ -502,6 +572,15 @@ export class Session {
         text: reply.trim(),
         language: this.#state.language,
         ...(interrupted ? { interrupted: true } : {}),
+      });
+
+      // Off the turn path. The user text is the one just recorded above it.
+      this.#emitMemWrite({
+        kind: "turn_completed",
+        tid: this.#state.turn_no,
+        user_text: userText,
+        agent_text: reply.trim(),
+        language: this.#state.language,
       });
     }
 
@@ -579,6 +658,18 @@ export class Session {
     this.#asr?.close();
     this.#tts?.close();
     void this.#persistState().catch(() => {});
+
+    // The episode is written from this event — a session is only summarisable
+    // once it has ended.
+    this.#emitMemWrite({
+      kind: "session_closed",
+      tid: this.#state.turn_no,
+      turn_count: this.#state.turn_no,
+      language: this.#state.language,
+      duration_s: Math.round(
+        (Date.now() - Date.parse(this.#state.started_at)) / 1000,
+      ),
+    });
     this.#d.device.sendControl({ type: "session_closed", reason });
     this.#d.device.close(reason);
     this.#log("info", "session closed", {

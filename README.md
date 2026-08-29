@@ -11,17 +11,19 @@ Start with [docs/01-architecture.md](docs/01-architecture.md).
 ## Status
 
 **Slice 1** (end-to-end exchange) · **Slice 2, server half** (echo guard) ·
-**Slice 3** (working memory) · **Slice 7** (speakability gate).
+**Slice 3** (working memory) · **Slice 4** (continuity across days) ·
+**Slice 7** (speakability gate).
 See [docs/04-milestones.md](docs/04-milestones.md) for the full slice plan.
 
 | Built | Not yet |
 |---|---|
-| Device WebSocket transport | Long-term memory + `mem:writes` worker |
-| Sarvam ASR / LLM / TTS clients | Tools and spoken fillers |
-| Turn state machine + barge-in | **AEC (device side — needs hardware)** |
-| **Speakability gate — all three gates** | Wake word |
-| **Echo guard — the self-interruption defence** | Deepgram Hindi ASR standby |
-| **Working memory: 12-turn window, idle TTLs, turn lock, resume** | |
+| Device WebSocket transport | Tools and spoken fillers |
+| Sarvam ASR / LLM / TTS clients | **AEC (device side — needs hardware)** |
+| Turn state machine + barge-in | Wake word |
+| **Speakability gate — all three gates** | Deepgram Hindi ASR standby |
+| **Echo guard — the self-interruption defence** | **Durable memory backend ([ADR 0004](docs/adr/0004-vector-store.md) still Proposed)** |
+| **Working memory: 12-turn window, idle TTLs, turn lock, resume** | **A real multilingual embedder** |
+| **Long-term memory: `mem:writes`, distiller, supersede/soft-delete, profile** | |
 | Clause chunker (streams TTS at clause boundaries) | |
 | Refusal copy in 11 languages | |
 
@@ -166,7 +168,20 @@ product, so we speak the protocol directly.
     the only visibility we have into cancellation quality.
   - `HALF_DUPLEX=true` mutes barge-in entirely — the emergency fallback if AEC
     proves intractable. It is a product downgrade, not a fix.
-- **No memory.** Every session starts cold. Slices 3 and 4.
+- **Long-term memory is in-process and not durable.** Facts and episodes are lost
+  on restart; the server warns about this at boot. [ADR 0004](docs/adr/0004-vector-store.md)
+  (Postgres + pgvector) is still *Proposed* — no vendor docs were ever researched
+  for it — so the pipeline is built behind a `LongTermStore` interface instead.
+  The distillation logic, which is where the product actually lives, is
+  backend-independent and fully tested.
+- **The embedder is a placeholder.** `HashingEmbedder` matches lexically and
+  cannot bridge scripts: "They live in Bengaluru" scores zero against
+  "वे बेंगलुरु में रहते हैं". Our facts are multilingual by construction, so this
+  must be replaced before retrieval is trusted. There is a test asserting the
+  limitation so it stays visible rather than becoming a silent quality bug.
+- **The memory worker is single-replica.** Its idempotency ledger is in-process;
+  two workers would duplicate facts. See Q6b in
+  [docs/05-open-questions.md](docs/05-open-questions.md).
 - **Latency is unmeasured.** The budget in
   [docs/03-latency-budget.md](docs/03-latency-budget.md) is hypotheses with named
   consequences — a realistic estimate lands at ~945 ms against an 800 ms target,
