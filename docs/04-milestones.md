@@ -117,6 +117,20 @@ three turns back; it follows.
 **Exit:** a ten-turn conversation with correct reference resolution, and a resume after a
 five-minute pause that picks up the thread.
 
+**Built.** `SessionStore` sits behind an interface with three implementations: Redis,
+in-memory, and `NullSessionStore` for the degraded path — because "Redis down → continue
+stateless" is a specified behaviour, not an aspiration, and it needs somewhere to live.
+The contract suite runs against Redis and memory alike; if they disagree, one is wrong.
+
+Two details worth keeping straight during implementation:
+
+- **`close()` does not delete session keys.** They are left to expire. That is what makes
+  resume-within-the-idle-window work at all — deleting on disconnect would drop the thread
+  every time someone's wifi hiccuped.
+- **An interrupted reply is still recorded**, flagged `interrupted: true`. The window must
+  reflect the conversation the user *heard*, not the one we intended to have. Storing the
+  full intended reply would leave the model convinced it said things the user never got.
+
 ---
 
 ## Slice 4 — Continuity across days

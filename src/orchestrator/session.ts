@@ -2,8 +2,8 @@
  * One conversation session. Owns turn state, the speakability gates, streaming
  * and barge-in.
  *
- * SCOPE — this is slice 1 + slice 7 (the gate). Deliberately NOT here:
- * Redis working memory, long-term memory, tools, AEC, wake word.
+ * SCOPE — slices 1, 2 (server half), 3 and 7. Deliberately NOT here:
+ * long-term memory, the mem:writes worker, tools, device-side AEC, wake word.
  * See docs/04-milestones.md
  *
  * BARGE-IN follows Sarvam's own documented rule: trigger on vad.speech_start or
@@ -20,10 +20,12 @@ import { ClauseChunker } from "../domain/clause-chunker.ts";
 import { EchoGuard } from "../domain/echo-guard.ts";
 import { normalizeLanguage } from "../domain/languages.ts";
 import { transition } from "../domain/turn-state.ts";
-import type { GateDecision, LanguageCode, Profile, SessionState, TurnPhase } from "../domain/types.ts";
+import { TURN_WINDOW } from "../domain/redis-keys.ts";
+import type { GateDecision, LanguageCode, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
 import { SarvamAsr } from "../providers/sarvam-asr.ts";
 import { SarvamLlm, RateLimitError } from "../providers/sarvam-llm.ts";
 import { SarvamTts } from "../providers/sarvam-tts.ts";
+import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
 
 export type DeviceLink = {
   sendAudio(pcm: Buffer): void;
@@ -35,6 +37,9 @@ export type SessionDeps = {
   cfg: Config;
   device: DeviceLink;
   uid: string;
+  /** Resume an existing session within its idle window. Omit to start fresh. */
+  sid?: string | undefined;
+  store?: SessionStore | undefined;
   profile?: Profile | undefined;
   localeHint?: LanguageCode | undefined;
   log?: (level: string, msg: string, extra?: Record<string, unknown>) => void;
@@ -49,14 +54,18 @@ const SYSTEM_PROMPT = [
 ].join(" ");
 
 export class Session {
-  readonly sid = randomUUID();
+  readonly sid: string;
   #phase: TurnPhase = "idle";
   #state: SessionState;
+  /** Newest-first window, mirroring the Redis list. */
+  #turns: Turn[] = [];
+  #resumed = false;
   #asr: SarvamAsr | null = null;
   #tts: SarvamTts | null = null;
   readonly #llm: SarvamLlm;
   readonly #chunker = new ClauseChunker();
   readonly #echo: EchoGuard;
+  readonly #store: SessionStore;
   #turnAbort: AbortController | null = null;
   #firstDetectionDone = false;
   #closed = false;
@@ -65,8 +74,10 @@ export class Session {
 
   constructor(deps: SessionDeps) {
     this.#d = deps;
+    this.sid = deps.sid ?? randomUUID();
     this.#llm = new SarvamLlm(deps.cfg);
     this.#echo = new EchoGuard(deps.cfg.echoGuard);
+    this.#store = deps.store ?? new NullSessionStore();
 
     const now = new Date().toISOString();
     const seed = this.#resolveSeed();
@@ -85,6 +96,16 @@ export class Session {
       degraded: [],
       switch_declined_acknowledged: false,
     };
+  }
+
+  /** True when this session picked up an existing thread from the store. */
+  get resumed(): boolean {
+    return this.#resumed;
+  }
+
+  /** Newest-first, as stored. */
+  get turns(): readonly Turn[] {
+    return this.#turns;
   }
 
   get state(): Readonly<SessionState> {
@@ -108,6 +129,8 @@ export class Session {
    * costs nothing and saves a connection against a 20-socket ceiling.
    */
   async start(): Promise<void> {
+    await this.#restore();
+
     const g1 = gate1PreConnect(this.#state.language);
     this.#log("info", "gate1", { seed: this.#state.language, action: g1.action });
 
@@ -119,6 +142,66 @@ export class Session {
     this.#openTts(this.#state.language);
     this.#openAsr();
     this.#apply({ type: "session_open" });
+    await this.#persistState();
+  }
+
+  /**
+   * Resume within the idle window, or start fresh.
+   *
+   * A store outage is NOT fatal here: we fall back to a clean stateless session
+   * and mark it degraded. The companion becomes shallow but stays alive, which
+   * is the specified trade (docs/01-architecture.md section 6).
+   */
+  async #restore(): Promise<void> {
+    try {
+      const ctx = await this.#store.loadForTurn(this.sid, this.#d.uid, TURN_WINDOW);
+
+      if (ctx.state) {
+        this.#state = ctx.state;
+        this.#turns = ctx.turns;
+        this.#resumed = true;
+        this.#firstDetectionDone = ctx.turns.length > 0;
+        this.#log("info", "session resumed", {
+          turns: ctx.turns.length,
+          turn_no: ctx.state.turn_no,
+          language: ctx.state.language,
+        });
+        return;
+      }
+
+      // No stored state, but a profile may still seed the language.
+      if (ctx.profile?.preferred_language) {
+        const code = normalizeLanguage(ctx.profile.preferred_language);
+        if (code) {
+          this.#state.language = code;
+          this.#state.language_source = "profile";
+        }
+      }
+    } catch (err) {
+      this.#state.degraded.push("store_unavailable");
+      this.#log("warn", "store unavailable, continuing stateless", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async #persistState(): Promise<void> {
+    try {
+      this.#state.last_activity_at = new Date().toISOString();
+      await this.#store.saveState(this.#state);
+      await this.#store.touch(this.sid);
+    } catch (err) {
+      this.#markStoreDegraded(err);
+    }
+  }
+
+  #markStoreDegraded(err: unknown): void {
+    if (!this.#state.degraded.includes("store_unavailable")) {
+      this.#state.degraded.push("store_unavailable");
+    }
+    this.#log("warn", "store write failed", {
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 
   #openAsr(): void {
@@ -241,9 +324,81 @@ export class Session {
       }
     }
 
-    this.#state.turn_no += 1;
-    this.#state.last_activity_at = new Date().toISOString();
-    await this.#respond(text);
+    // One turn at a time per session. Without this, a barge-in can race a
+    // completing turn into a corrupted window.
+    const token = randomUUID();
+    let held = false;
+    try {
+      held = await this.#store.acquireLock(this.sid, token);
+    } catch (err) {
+      this.#markStoreDegraded(err);
+      held = true; // A store outage must not stop the conversation.
+    }
+    if (!held) {
+      this.#log("warn", "turn skipped, lock held elsewhere");
+      return;
+    }
+
+    try {
+      this.#state.turn_no += 1;
+      await this.#recordTurn({ role: "user", text, language: this.#state.language });
+      await this.#respond(text);
+    } finally {
+      try {
+        await this.#store.releaseLock(this.sid, token);
+      } catch {
+        // Lock expires on its own; nothing useful to do here.
+      }
+    }
+  }
+
+  /** Append to the capped window and keep the in-process copy in step. */
+  async #recordTurn(
+    partial: Pick<Turn, "role" | "text" | "language"> & Partial<Turn>,
+  ): Promise<void> {
+    const turn: Turn = {
+      tid: this.#state.turn_no,
+      at: new Date().toISOString(),
+      ...partial,
+    };
+    this.#turns.unshift(turn);
+    this.#turns = this.#turns.slice(0, TURN_WINDOW);
+
+    try {
+      await this.#store.appendTurn(this.sid, turn, TURN_WINDOW);
+      await this.#persistState();
+    } catch (err) {
+      this.#markStoreDegraded(err);
+    }
+  }
+
+  /**
+   * Build the LLM window: oldest first, capped, with each turn's own language.
+   *
+   * `language` is per turn rather than per session on purpose — a code-mixing
+   * user produces a mixed window, and the model should see that rather than a
+   * flattened single value (docs/02-data-contracts.md section 2.4).
+   */
+  #buildMessages(userText: string): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+    const history = [...this.#turns]
+      .reverse()
+      .filter((t) => t.text.trim() !== "")
+      .map((t) => ({
+        role: t.role === "user" ? ("user" as const) : ("assistant" as const),
+        content: t.text,
+      }));
+
+    // The current turn was just recorded, so it is already the last entry.
+    const alreadyIncluded =
+      history.length > 0 &&
+      history[history.length - 1]!.role === "user" &&
+      history[history.length - 1]!.content === userText;
+
+    return [
+      { role: "system" as const, content: SYSTEM_PROMPT },
+      ...history,
+      ...(alreadyIncluded ? [] : [{ role: "user" as const, content: userText }]),
+    ];
   }
 
   /**
@@ -305,15 +460,19 @@ export class Session {
     this.#turnAbort = abort;
     this.#chunker.reset();
 
-    const messages = [
-      { role: "system" as const, content: SYSTEM_PROMPT },
-      { role: "user" as const, content: userText },
-    ];
+    const messages = this.#buildMessages(userText);
+
+    // Declared out here so the interrupted and failed paths can both record what
+    // was actually said. The window must reflect the conversation the user
+    // HEARD, not the one we intended to have.
+    let reply = "";
+    let spokeAnything = false;
+    let failure: unknown = null;
 
     try {
-      let spokeAnything = false;
       for await (const delta of this.#llm.stream(messages, { signal: abort.signal })) {
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted) break;
+        reply += delta;
         for (const chunk of this.#chunker.push(delta)) {
           if (!spokeAnything) {
             this.#apply({ type: "first_clause_ready" });
@@ -322,21 +481,38 @@ export class Session {
           this.#emitToTts(chunk);
         }
       }
-      if (abort.signal.aborted) return;
 
-      const tail = this.#chunker.flush();
-      if (tail) {
-        if (!spokeAnything) this.#apply({ type: "first_clause_ready" });
-        this.#emitToTts(tail);
+      if (!abort.signal.aborted) {
+        const tail = this.#chunker.flush();
+        if (tail) {
+          if (!spokeAnything) this.#apply({ type: "first_clause_ready" });
+          this.#emitToTts(tail);
+        }
+        this.#tts?.flush();
       }
-      this.#tts?.flush();
     } catch (err) {
-      if (abort.signal.aborted) return;
-      if (err instanceof RateLimitError) {
+      failure = err;
+    }
+
+    const interrupted = abort.signal.aborted;
+
+    if (reply.trim() !== "") {
+      await this.#recordTurn({
+        role: "agent",
+        text: reply.trim(),
+        language: this.#state.language,
+        ...(interrupted ? { interrupted: true } : {}),
+      });
+    }
+
+    if (failure && !interrupted) {
+      if (failure instanceof RateLimitError) {
         this.#log("warn", "llm rate limited");
-        this.#state.degraded.push("llm_429");
+        if (!this.#state.degraded.includes("llm_429")) this.#state.degraded.push("llm_429");
       } else {
-        this.#log("error", "llm", { err: err instanceof Error ? err.message : String(err) });
+        this.#log("error", "llm", {
+          err: failure instanceof Error ? failure.message : String(failure),
+        });
       }
       this.#apply({ type: "playback_drained" });
     }
@@ -390,15 +566,26 @@ export class Session {
     return result;
   }
 
+  /**
+   * Close the transport. Session keys are LEFT TO EXPIRE rather than deleted —
+   * that is what makes resume-within-the-idle-window work. A companion that
+   * drops the thread because someone walked away for five minutes is the exact
+   * failure the idle TTL exists to prevent (docs/02-data-contracts.md section 6).
+   */
   close(reason: string): void {
     if (this.#closed) return;
     this.#closed = true;
     this.#turnAbort?.abort();
     this.#asr?.close();
     this.#tts?.close();
+    void this.#persistState().catch(() => {});
     this.#d.device.sendControl({ type: "session_closed", reason });
     this.#d.device.close(reason);
-    this.#log("info", "session closed", { reason, turns: this.#state.turn_no });
+    this.#log("info", "session closed", {
+      reason,
+      turns: this.#state.turn_no,
+      degraded: this.#state.degraded,
+    });
   }
 
   #log(level: string, msg: string, extra: Record<string, unknown> = {}): void {

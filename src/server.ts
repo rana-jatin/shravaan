@@ -19,6 +19,9 @@ import { loadConfig } from "./config/env.ts";
 import { assertMatrixIntegrity, SPEAKABLE } from "./domain/languages.ts";
 import { pendingNativeReview } from "./copy/refusals.ts";
 import { Session } from "./orchestrator/session.ts";
+import { MemorySessionStore } from "./store/memory-store.ts";
+import { RedisSessionStore } from "./store/redis-store.ts";
+import type { SessionStore } from "./store/session-store.ts";
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}): void {
   const line = { t: new Date().toISOString(), level, msg, ...extra };
@@ -40,12 +43,23 @@ export function start(): WebSocketServer {
     });
   }
 
+  const store: SessionStore = cfg.redisUrl
+    ? new RedisSessionStore(cfg.redisUrl)
+    : new MemorySessionStore();
+
+  if (!cfg.redisUrl) {
+    log("warn", "no REDIS_URL — using in-process working memory", {
+      note: "sessions will not survive a restart and cannot be shared across replicas",
+    });
+  }
+
   const wss = new WebSocketServer({ port: cfg.port });
   log("info", "listening", {
     port: cfg.port,
     speakable: SPEAKABLE.length,
     asrRate: cfg.asrSampleRate,
     ttsRate: cfg.ttsSampleRate,
+    store: cfg.redisUrl ? "redis" : "memory",
   });
 
   wss.on("connection", (ws: WebSocket) => {
@@ -68,7 +82,11 @@ export function start(): WebSocketServer {
       if (msg["type"] === "hello" && session === null) {
         session = new Session({
           cfg,
+          store,
           uid: String(msg["uid"] ?? "anonymous"),
+          // A device reconnecting with its previous sid resumes that thread,
+          // provided the idle window has not lapsed.
+          sid: typeof msg["sid"] === "string" ? msg["sid"] : undefined,
           localeHint: typeof msg["locale_hint"] === "string" ? msg["locale_hint"] : undefined,
           log,
           device: {

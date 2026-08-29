@@ -95,6 +95,14 @@ export function loadConfig() {
       halfDuplex: opt("HALF_DUPLEX", "false") === "true",
     },
 
+    /**
+     * Working memory. Unset means an in-process store — fine for a single
+     * instance and for development, useless across restarts or replicas.
+     * A store outage is survivable by design: the session continues stateless
+     * and marks itself degraded.
+     */
+    redisUrl: process.env["REDIS_URL"]?.trim() || null,
+
     port: num("PORT", 8080),
     logLevel: opt("LOG_LEVEL", "info"),
   };

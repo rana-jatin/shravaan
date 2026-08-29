@@ -10,18 +10,19 @@ Start with [docs/01-architecture.md](docs/01-architecture.md).
 
 ## Status
 
-**Slice 1** (thinnest end-to-end exchange) · **Slice 7** (speakability gate) ·
-**Slice 2, server half** (echo guard + barge-in).
+**Slice 1** (end-to-end exchange) · **Slice 2, server half** (echo guard) ·
+**Slice 3** (working memory) · **Slice 7** (speakability gate).
 See [docs/04-milestones.md](docs/04-milestones.md) for the full slice plan.
 
 | Built | Not yet |
 |---|---|
-| Device WebSocket transport | Redis working memory |
-| Sarvam ASR / LLM / TTS clients | Long-term memory + `mem:writes` worker |
-| Turn state machine + barge-in | Tools and spoken fillers |
-| **Speakability gate — all three gates** | **AEC (device side — needs hardware)** |
-| **Echo guard — the self-interruption defence** | Wake word |
-| Clause chunker (streams TTS at clause boundaries) | Deepgram Hindi ASR standby |
+| Device WebSocket transport | Long-term memory + `mem:writes` worker |
+| Sarvam ASR / LLM / TTS clients | Tools and spoken fillers |
+| Turn state machine + barge-in | **AEC (device side — needs hardware)** |
+| **Speakability gate — all three gates** | Wake word |
+| **Echo guard — the self-interruption defence** | Deepgram Hindi ASR standby |
+| **Working memory: 12-turn window, idle TTLs, turn lock, resume** | |
+| Clause chunker (streams TTS at clause boundaries) | |
 | Refusal copy in 11 languages | |
 
 ---
@@ -74,11 +75,24 @@ succeeds, the LLM succeeds, and the user hears nothing.
 npm install
 cp .env.example .env      # add SARVAM_API_KEY
 npm run typecheck
-npm test                  # 81 tests, no credentials needed
+npm test                  # 116 tests, no credentials needed
 npm run dev               # device WebSocket server on :8080
 ```
 
 Requires Node ≥ 22.6 (uses native TypeScript type stripping — no build step).
+
+**Working memory** falls back to an in-process store when `REDIS_URL` is unset —
+fine for development, useless across restarts or replicas. Setting it also enables
+the Redis half of the store contract suite, which is **written but has never been
+executed** (no Redis was reachable in the environment where this was built):
+
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+REDIS_URL=redis://localhost:6379 npm test    # runs the contract against both stores
+```
+
+Do that before trusting the Redis path. The in-memory store passing proves the
+contract is coherent, not that `ioredis` behaves as assumed.
 
 ---
 
