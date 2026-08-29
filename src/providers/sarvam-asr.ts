@@ -16,6 +16,7 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import type { Config } from "../config/env.ts";
+import type { AsrClient, AsrEvents, AsrTranscript } from "./asr-client.ts";
 
 export type AsrMode = "transcribe" | "translate" | "verbatim" | "translit" | "codemix";
 
@@ -31,27 +32,18 @@ export type AsrOptions = {
   returnTimestamps?: boolean;
 };
 
-export type TranscriptEvent = {
-  text: string;
-  /** Present when auto-detection is active. */
-  language?: string;
-  /** Sarvam documents `language_probability` for detection — NOT ASR confidence. */
-  languageProbability?: number;
-  startS?: number;
-  endS?: number;
-};
+/**
+ * Shared with the Deepgram standby — see src/providers/asr-client.ts.
+ *
+ * Note the asymmetry that survives into the type: the `confidence` field there is
+ * NEVER populated on this path. Sarvam documents `language_probability`, a
+ * detection score, and no ASR confidence anywhere (docs/05-open-questions.md Q4).
+ */
+export type TranscriptEvent = AsrTranscript;
+export type SarvamAsrEvents = AsrEvents;
 
-export interface SarvamAsrEvents {
-  open: [];
-  speech_start: [];
-  speech_end: [];
-  partial: [TranscriptEvent];
-  final: [TranscriptEvent];
-  error: [Error];
-  close: [{ code: number; reason: string }];
-}
-
-export class SarvamAsr extends EventEmitter<SarvamAsrEvents> {
+export class SarvamAsr extends EventEmitter<AsrEvents> implements AsrClient {
+  readonly provider = "sarvam" as const;
   #ws: WebSocket | null = null;
   readonly #cfg: Config;
   readonly #opts: AsrOptions;

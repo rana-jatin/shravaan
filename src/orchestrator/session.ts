@@ -25,10 +25,16 @@ import { EchoGuard } from "../domain/echo-guard.ts";
 import { normalizeLanguage } from "../domain/languages.ts";
 import { transition } from "../domain/turn-state.ts";
 import { TURN_WINDOW } from "../domain/redis-keys.ts";
-import type { GateDecision, JsonContext, LanguageCode, MemWriteEvent, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
+import { LLM_RETRY, SOCKET_RECONNECT, delayFor, withBackoff } from "../domain/backoff.ts";
+import { DEGRADATIONS, DegradationLedger, type DegradationKey } from "../domain/degradation.ts";
+import { standbyFor } from "../domain/asr-failover.ts";
+import type { GateDecision, JsonContext, LanguageCode, MemWriteEvent, MessageKey, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
+import type { AsrClient } from "../providers/asr-client.ts";
+import { DeepgramAsr } from "../providers/deepgram-asr.ts";
 import { SarvamAsr } from "../providers/sarvam-asr.ts";
-import { SarvamLlm, RateLimitError, type ChatMessage } from "../providers/sarvam-llm.ts";
+import { SarvamLlm, RateLimitError, type ChatMessage, type StreamChunk } from "../providers/sarvam-llm.ts";
 import { SarvamTts } from "../providers/sarvam-tts.ts";
+import type { HoldingAudio } from "../audio/holding-audio.ts";
 import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
 import type { MemWriteStream } from "../memory/stream.ts";
 import { ToolExecutor } from "../tools/executor.ts";
@@ -56,6 +62,11 @@ export type SessionDeps = {
   tools?: ToolRegistry | undefined;
   /** Fetches JSON context from our backend. Read-only to the agent. */
   fetchContext?: ((uid: string) => Promise<JsonContext | null>) | undefined;
+  /**
+   * Pre-rendered apology audio for a TTS outage — the one message that cannot be
+   * synthesised, because synthesis is what broke (slice 8).
+   */
+  holdingAudio?: HoldingAudio | undefined;
   log?: (level: string, msg: string, extra?: Record<string, unknown>) => void;
 };
 
@@ -64,6 +75,30 @@ export type SessionDeps = {
  * open indefinitely. The user is waiting in real time.
  */
 const MAX_TOOL_ROUNDS = 3;
+
+/**
+ * How long a retrying turn may stay silent before we say something. Below this
+ * the retry is invisible and a filler would only make a fast turn feel slow;
+ * above it the user is sitting in dead air wondering if we are still here.
+ */
+const LLM_FILLER_AFTER_MS = 600;
+
+/** Consecutive ASR socket failures before we stop reconnecting and admit it. */
+const MAX_ASR_REOPENS = 4;
+
+/**
+ * Consecutive turns that produce nothing before we stop claiming to be a
+ * conversation. Three, not one: a 429 is per-account and transient, and closing
+ * a companion session over one unlucky minute is its own failure.
+ */
+const MAX_LLM_TURN_FAILURES = 3;
+
+/**
+ * Time for the closing message to actually reach the device before teardown.
+ * Generous on purpose: cutting our own apology off mid-word to save three
+ * seconds is the exact failure this whole slice exists to avoid.
+ */
+const GOODBYE_DRAIN_MS = 4000;
 
 const SYSTEM_PROMPT = [
   "You are a warm, attentive companion. Keep replies short and conversational —",
@@ -82,7 +117,7 @@ export class Session {
   #resumed = false;
   /** Warmed from the store at session open; the only long-term memory on the turn path. */
   #profile: Profile | null = null;
-  #asr: SarvamAsr | null = null;
+  #asr: AsrClient | null = null;
   #tts: SarvamTts | null = null;
   readonly #llm: SarvamLlm;
   readonly #chunker = new ClauseChunker();
@@ -96,6 +131,16 @@ export class Session {
   #turnAbort: AbortController | null = null;
   #firstDetectionDone = false;
   #closed = false;
+
+  // --- slice 8 ---------------------------------------------------------------
+  /** What is currently broken. Mirrored into state.degraded. */
+  #ledger!: DegradationLedger;
+  #asrReopens = 0;
+  #asrReopenTimer: NodeJS.Timeout | null = null;
+  /** Consecutive turns that produced no reply. Reset by any turn that works. */
+  #llmFailures = 0;
+  /** Set once a mute-severity failure has been announced, so we say it once. */
+  #terminating = false;
 
   readonly #d: SessionDeps;
 
@@ -141,6 +186,18 @@ export class Session {
       degraded: [],
       switch_declined_acknowledged: false,
     };
+
+    // The ledger owns `degraded`; nothing else pushes to that array. Keeping one
+    // writer is what stops the same key appearing four times in the incident log
+    // of a session where Redis flapped four times.
+    this.#ledger = new DegradationLedger([], (keys) => {
+      this.#state.degraded = keys;
+    });
+  }
+
+  /** What the session has lost, and whether it can still hold a conversation. */
+  get degraded(): DegradationKey[] {
+    return this.#ledger.list();
   }
 
   /** True when this session picked up an existing thread from the store. */
@@ -216,6 +273,12 @@ export class Session {
         this.#state = ctx.state;
         this.#turns = ctx.turns;
         this.#resumed = true;
+        // A resumed session inherits whatever was still broken when it paused,
+        // and the ledger takes the array over from here. Starting clean would
+        // hide a degradation that has been running for an hour.
+        this.#ledger = new DegradationLedger(ctx.state.degraded, (keys) => {
+          this.#state.degraded = keys;
+        });
         this.#firstDetectionDone = ctx.turns.length > 0;
         this.#log("info", "session resumed", {
           turns: ctx.turns.length,
@@ -234,10 +297,7 @@ export class Session {
         }
       }
     } catch (err) {
-      this.#state.degraded.push("store_unavailable");
-      this.#log("warn", "store unavailable, continuing stateless", {
-        err: err instanceof Error ? err.message : String(err),
-      });
+      this.#markStoreDegraded(err);
     }
   }
 
@@ -251,34 +311,67 @@ export class Session {
     }
   }
 
+  /**
+   * Mark a degradation and log the transition ONCE.
+   *
+   * The "once" is the point. A flapping dependency logs on every turn otherwise,
+   * and the line that says what the user is actually losing gets buried under a
+   * thousand copies of itself.
+   */
+  #degrade(key: DegradationKey, extra: Record<string, unknown> = {}): void {
+    if (!this.#ledger.mark(key)) return;
+    const spec = DEGRADATIONS[key];
+    this.#log(spec.severity === "mute" ? "error" : "warn", "degraded", {
+      key,
+      severity: spec.severity,
+      lost: spec.lost,
+      ...extra,
+    });
+  }
+
+  #recover(key: DegradationKey): void {
+    if (this.#ledger.clear(key)) this.#log("info", "recovered", { key });
+  }
+
   #markStoreDegraded(err: unknown): void {
-    if (!this.#state.degraded.includes("store_unavailable")) {
-      this.#state.degraded.push("store_unavailable");
-    }
-    this.#log("warn", "store write failed", {
+    this.#degrade("store_unavailable", {
       err: err instanceof Error ? err.message : String(err),
     });
   }
 
-  #openAsr(): void {
-    // Auto-detect on the first turn so the user's actual language wins over the
-    // seed. The token itself is unresolved in Sarvam's docs (docs/05 Q1).
-    const asr = new SarvamAsr(this.#d.cfg, {
-      languageCode: this.#d.cfg.asrAutodetectToken,
-      mode: "codemix",
-      returnTimestamps: true,
-    });
+  #openAsr(provider: "sarvam" | "deepgram" = "sarvam"): void {
+    const asr: AsrClient =
+      provider === "deepgram"
+        ? new DeepgramAsr(this.#d.cfg, {
+            // Flux wants a bare primary subtag. Only reached for hi-IN / en-IN.
+            languageHint: this.#state.language.split("-")[0]!,
+          })
+        : // Auto-detect on the first turn so the user's actual language wins over
+          // the seed. The token itself is unresolved in Sarvam's docs (docs/05 Q1).
+          new SarvamAsr(this.#d.cfg, {
+            languageCode: this.#d.cfg.asrAutodetectToken,
+            mode: "codemix",
+            returnTimestamps: true,
+          });
 
+    asr.on("open", () => {
+      // A clean open resets the failure count. Otherwise four failures spread
+      // across an hour of healthy conversation eventually mute the session.
+      this.#asrReopens = 0;
+    });
     asr.on("speech_start", () => this.#onSpeechStart());
     asr.on("partial", (t) => this.#onPartial(t.text));
     asr.on("final", (t) => void this.#onFinal(t.text, t.language, t.languageProbability));
-    asr.on("error", (e) => this.#log("error", "asr", { err: e.message }));
+    asr.on("error", (e) => this.#log("error", "asr", { provider, err: e.message }));
     asr.on("close", ({ code }) => {
-      if (!this.#closed) this.#log("warn", "asr closed", { code });
+      if (this.#closed || this.#terminating) return;
+      this.#log("warn", "asr closed", { provider, code });
+      this.#onAsrDown(`socket closed with ${code}`);
     });
 
     asr.connect();
     this.#asr = asr;
+    this.#state.asr_provider = provider;
   }
 
   #openTts(language: LanguageCode): void {
@@ -298,8 +391,165 @@ export class Session {
       this.#apply({ type: "playback_drained" });
     });
     tts.on("error", (e) => this.#log("error", "tts", { err: e.message }));
+
+    // A reconnect is routine — Bulbul closes the socket after ~1 min idle and a
+    // companion pauses for far longer than that. Logged, not degraded.
+    tts.on("reconnecting", ({ attempt, delayMs }) =>
+      this.#log("info", "tts reconnecting", { attempt, delayMs }),
+    );
+
+    // Speech that went stale while the socket was down. The reply was composed
+    // and never heard, so the turn record above it is now a lie by omission —
+    // worth a warning even though the conversation survives.
+    tts.on("dropped", ({ chars, ageMs }) =>
+      this.#log("warn", "tts dropped stale speech", {
+        chars,
+        ageMs,
+        note: "spoken this late it would answer a question the user has moved past",
+      }),
+    );
+
+    // The accepted single point of failure, arriving. No Indic TTS failover
+    // exists anywhere in the stack — docs/adr/0005-tts-provider-split.md.
+    tts.on("unavailable", (err) => this.#loseVoice(err));
+
     tts.connect();
     this.#tts = tts;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 8 — what happens when a dependency goes.
+  //
+  // Three of these end the session. They all funnel through #terminate() so that
+  // the closing message is said EXACTLY ONCE: a Bulbul outage takes the TTS
+  // socket down, which drops the ASR reply path, which looks like a second
+  // failure, and a naive implementation apologises three times on the way out.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The ASR socket dropped.
+   *
+   * Note the deliberate reluctance to fail over on the first failure. Deepgram
+   * publishes EU and AU endpoints and no India region, while Sarvam's pitch
+   * includes India data residency — so a failover moves a user's voice out of the
+   * country. Doing that in response to one transient socket close would be a
+   * compliance decision made by a network blip. We reconnect first, and only
+   * relocate if Sarvam genuinely will not come back.
+   */
+  #onAsrDown(reason: string): void {
+    if (this.#closed || this.#terminating || this.#asrReopenTimer) return;
+
+    this.#asrReopens += 1;
+    this.#asr?.close();
+    this.#asr = null;
+
+    const standby = standbyFor(this.#state.language, {
+      configured: this.#d.cfg.asrFailoverEnabled && this.#d.cfg.deepgramApiKey !== null,
+      current: this.#state.asr_provider,
+    });
+
+    if (standby.available && this.#asrReopens >= 2) {
+      this.#degrade("asr_failover_active", {
+        from: reason,
+        language: this.#state.language,
+        residency: "audio now leaves India — Deepgram publishes no India region",
+      });
+      this.#openAsr("deepgram");
+      return;
+    }
+
+    if (this.#asrReopens > MAX_ASR_REOPENS) {
+      this.#loseHearing(
+        standby.available ? reason : `${reason} (no standby: ${standby.detail})`,
+      );
+      return;
+    }
+
+    const delayMs = delayFor(this.#asrReopens - 1, SOCKET_RECONNECT);
+    this.#log("warn", "reopening asr", {
+      attempt: this.#asrReopens,
+      delayMs,
+      standby: standby.available ? "available" : standby.reason,
+    });
+    this.#asrReopenTimer = setTimeout(() => {
+      this.#asrReopenTimer = null;
+      if (!this.#closed && !this.#terminating) this.#openAsr(this.#state.asr_provider);
+    }, delayMs);
+    this.#asrReopenTimer.unref?.();
+  }
+
+  /** Bulbul is gone. The accepted single point of failure, actually happening. */
+  #loseVoice(err: Error): void {
+    this.#terminate("tts_unavailable", err.message);
+  }
+
+  /** Nothing the user says reaches us. We can still say why. */
+  #loseHearing(reason: string): void {
+    this.#terminate("asr_unavailable", reason);
+  }
+
+  /** The LLM is unreachable after backoff. Distinct from a slow turn. */
+  #loseThinking(err: unknown): void {
+    this.#terminate("llm_unavailable", err instanceof Error ? err.message : String(err));
+  }
+
+  /**
+   * Say the one thing worth saying, then close.
+   *
+   * Idempotent by design — see the block comment above. Anything already in
+   * flight is abandoned first: a half-composed reply arriving after the goodbye
+   * is worse than no reply at all.
+   */
+  #terminate(key: DegradationKey, detail: string): void {
+    if (this.#terminating || this.#closed) return;
+    this.#terminating = true;
+    this.#degrade(key, { detail });
+
+    this.#turnAbort?.abort();
+    this.#chunker.reset();
+    void this.#executor?.clearAll();
+
+    const spec = DEGRADATIONS[key];
+    if (spec.message_key) {
+      this.#sayGoodbye(spec.message_key, spec.requires_prerendered_audio === true);
+    }
+
+    setTimeout(() => this.close(key), GOODBYE_DRAIN_MS).unref?.();
+  }
+
+  /**
+   * Speak the closing line, synthesising it if we still can and playing bytes off
+   * disk if we cannot.
+   *
+   * The pre-rendered branch is the whole reason src/audio/holding-audio.ts
+   * exists. If it is missing we say so loudly in the logs, because the user just
+   * experienced the exact silent failure this system is built to never produce,
+   * and the only trace will be this line.
+   */
+  #sayGoodbye(key: MessageKey, mustBePreRendered: boolean): void {
+    const language = this.#state.language;
+
+    if (!mustBePreRendered && this.#tts) {
+      this.#speak(resolveCopy(key, language).text);
+      return;
+    }
+
+    const pcm = this.#d.holdingAudio?.get(key, language) ?? null;
+    if (pcm) {
+      this.#log("info", "playing pre-rendered holding audio", { key, language, bytes: pcm.length });
+      this.#d.device.sendAudio(pcm);
+      return;
+    }
+
+    this.#log("error", "no pre-rendered audio — closing in silence", {
+      key,
+      language,
+      consequence: "the user hears nothing and is given no reason",
+      fix: "npm run render:holding, then commit assets/holding/",
+    });
+    // Tell the device, even though nobody hears it. A device with a screen or a
+    // light can still show something, and it is the only channel left.
+    this.#d.device.sendControl({ type: "notice", key, language });
   }
 
   /** Device audio in. */
@@ -362,7 +612,9 @@ export class Session {
   }
 
   async #onFinal(text: string, detected?: string, confidence?: number): Promise<void> {
-    if (this.#closed || text.trim() === "") return;
+    // A session on its way out still receives whatever the ASR had buffered.
+    // Answering it would talk over our own goodbye.
+    if (this.#closed || this.#terminating || text.trim() === "") return;
     this.#apply({ type: "speech_end", text });
 
     const decision = this.#runLanguageGate(detected, confidence);
@@ -513,7 +765,10 @@ export class Session {
     };
 
     void stream.append(full).catch((err: unknown) => {
-      this.#log("warn", "mem:writes append failed", {
+      // The stream is expected to buffer rather than throw (see
+      // src/memory/buffered-stream.ts), so reaching here means even the buffer
+      // gave up. Today's conversation is unaffected; tomorrow's is thinner.
+      this.#degrade("long_term_memory_unavailable", {
         err: err instanceof Error ? err.message : String(err),
       });
     });
@@ -609,11 +864,12 @@ export class Session {
             ? this.#tools.schemasFor(this.#jsonContext)
             : [];
 
-        for await (const chunk of this.#llm.stream(messages, {
-          signal: abort.signal,
-          ...(offered.length > 0 ? { tools: offered } : {}),
-        })) {
+        // Retries live inside here and stop at the first chunk — see the method.
+        const it = this.#llmStream(messages, offered, abort.signal, !spokeAnything);
+
+        for (let res = await it.next(); !res.done; res = await it.next()) {
           if (abort.signal.aborted) break;
+          const chunk = res.value;
           if (chunk.type === "text") {
             roundText += chunk.text;
             reply += chunk.text;
@@ -622,6 +878,9 @@ export class Session {
             calls.push({ id: chunk.id, name: chunk.name, args: chunk.args });
           }
         }
+        // The generator holds an open response body. A `break` above leaves it
+        // dangling, so close it explicitly rather than waiting for GC.
+        if (abort.signal.aborted) await it.return(undefined).catch(() => {});
 
         if (abort.signal.aborted || calls.length === 0) break;
 
@@ -681,16 +940,105 @@ export class Session {
     }
 
     if (failure && !interrupted) {
-      if (failure instanceof RateLimitError) {
-        this.#log("warn", "llm rate limited");
-        if (!this.#state.degraded.includes("llm_429")) this.#state.degraded.push("llm_429");
-      } else {
-        this.#log("error", "llm", {
-          err: failure instanceof Error ? failure.message : String(failure),
-        });
-      }
+      this.#onTurnFailed(failure, spokeAnything);
       this.#apply({ type: "playback_drained" });
+    } else if (!failure) {
+      // A turn that completed is evidence the LLM is back. Recovery is as
+      // reportable as failure, or the ledger only ever grows.
+      this.#llmFailures = 0;
+      this.#recover("llm_rate_limited");
     }
+  }
+
+  /**
+   * Open the LLM stream, retrying ONLY until the first chunk arrives.
+   *
+   * That boundary is the interesting decision. Once a clause has been synthesised
+   * the user has heard the start of a sentence; replaying the request would
+   * produce a different completion and the bot would talk over its own opening.
+   * So a 429 before first token is retryable, and a failure after it is not — it
+   * becomes a truncated reply, recorded as what the user actually heard.
+   *
+   * Sarvam-105B's limit is 40 req/min on Starter and it is per ACCOUNT, not per
+   * session ([ADR 0003](../../docs/adr/0003-llm.md)). When it trips it trips for
+   * every live conversation at once, which is why the backoff is jittered — see
+   * src/domain/backoff.ts.
+   */
+  async *#llmStream(
+    messages: ChatMessage[],
+    offered: ReturnType<ToolRegistry["schemasFor"]>,
+    signal: AbortSignal,
+    maySpeakFiller: boolean,
+  ): AsyncGenerator<StreamChunk, void, undefined> {
+    let fillerSpoken = false;
+
+    const opened = await withBackoff(
+      async () => {
+        const it = this.#llm.stream(messages, {
+          signal,
+          ...(offered.length > 0 ? { tools: offered } : {}),
+        });
+        // The fetch does not happen until the first pull, so this is what
+        // actually surfaces a 429 and makes it retryable.
+        const first = await it.next();
+        return { it, first };
+      },
+      {
+        policy: LLM_RETRY,
+        // A 500 or a malformed request will not fix itself in 250 ms, and
+        // retrying it burns the same rate limit a 429 is already telling us
+        // about. Only the limit itself is worth waiting out.
+        retryable: (err) => err instanceof RateLimitError,
+        signal,
+        onRetry: ({ attempt, delayMs, elapsedMs }) => {
+          this.#degrade("llm_rate_limited");
+          this.#log("warn", "llm retry", { attempt, delayMs, elapsedMs });
+
+          // Fill the silence only once it has become a silence. Below the
+          // threshold the retry is invisible and speaking would make a fast
+          // turn feel slow.
+          if (!fillerSpoken && maySpeakFiller && elapsedMs + delayMs >= LLM_FILLER_AFTER_MS) {
+            fillerSpoken = true;
+            this.#emitToTts(resolveFiller(this.#state.language, this.#fillerIndex++));
+            this.#tts?.flush();
+          }
+        },
+      },
+    );
+
+    if (!opened.first.done) yield opened.first.value;
+    yield* opened.it;
+  }
+
+  /**
+   * A turn produced nothing.
+   *
+   * ONE failure is answered and survived: the user asked something and is owed a
+   * reply, exactly as with a failed tool call, and silence after a "one moment"
+   * filler is the worst of both worlds. Repeated failures are a different claim —
+   * at that point we are not having a conversation and pretending otherwise
+   * wastes the user's evening.
+   */
+  #onTurnFailed(failure: unknown, spokeAnything: boolean): void {
+    this.#llmFailures += 1;
+
+    if (failure instanceof RateLimitError) {
+      this.#degrade("llm_rate_limited", { consecutive: this.#llmFailures });
+    } else {
+      this.#log("error", "llm", {
+        consecutive: this.#llmFailures,
+        err: failure instanceof Error ? failure.message : String(failure),
+      });
+    }
+
+    if (this.#llmFailures >= MAX_LLM_TURN_FAILURES) {
+      this.#loseThinking(failure);
+      return;
+    }
+
+    // A partial reply already reached the user; appending an apology to half a
+    // sentence reads worse than letting it stand.
+    if (!spokeAnything) this.#speak(resolveCopy("degraded.turn_failed", this.#state.language).text);
   }
 
   /**
@@ -802,9 +1150,16 @@ export class Session {
     if (this.#closed) return;
     this.#closed = true;
     this.#turnAbort?.abort();
+    if (this.#asrReopenTimer) clearTimeout(this.#asrReopenTimer);
+    this.#asrReopenTimer = null;
     this.#asr?.close();
     this.#tts?.close();
     void this.#persistState().catch(() => {});
+
+    // Everything the user quietly lost, in one line, at the one moment someone
+    // reading the logs has the whole session in front of them.
+    const silent = this.#ledger.silentLosses();
+    if (silent.length > 0) this.#log("warn", "session ran degraded", { losses: silent });
 
     // The episode is written from this event — a session is only summarisable
     // once it has ended.
@@ -822,7 +1177,9 @@ export class Session {
     this.#log("info", "session closed", {
       reason,
       turns: this.#state.turn_no,
-      degraded: this.#state.degraded,
+      degraded: this.#ledger.list(),
+      survivability: this.#ledger.survivability.level,
+      asr_provider: this.#state.asr_provider,
     });
   }
 

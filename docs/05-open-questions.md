@@ -155,14 +155,23 @@ Bengaluru" against "वे बेंगलुरु में रहते ह�
 construction. There is a test asserting that failure so it stays visible.
 See [ADR 0004](adr/0004-vector-store.md).
 
-### Q7. Does `mem:writes` get buffered during a Redis outage, or is the gap accepted?
+### Q7. Does `mem:writes` get buffered during a Redis outage, or is the gap accepted? — **RESOLVED**
 
-**Why it matters.** Not a provider question — ours. Under strong continuity, dropping the
-stream during an outage means the companion permanently forgets that stretch of
-conversation. Buffering locally adds a durability path and a replay ordering problem.
+**Answer: buffered, bounded, and every drop counted.** A 500-event in-process buffer; on
+overflow it evicts the oldest event of the *lowest priority* present
+(`correction` > `session_closed` > `explicit_recall` > `turn_completed`), because losing a
+correction leaves a superseded fact standing as current and that is worse than losing a
+detail. `droppedCount` is a product metric beside consumer lag, not a debug counter.
 
-**Flagged in** [02 §6](02-data-contracts.md#6-invalidation-rules). Needs a product decision
-about how much forgetting is acceptable, before slice 8.
+Rejected: dropping silently (forbidden by [02 §6](02-data-contracts.md#6-invalidation-rules)),
+buffering without limit (turns a memory outage into an OOM), and blocking the turn path
+(inverts the asymmetry the seam exists to create).
+
+**The accepted residual loss:** the buffer is in-process, so a crash during an outage loses
+the backlog. A durable write-ahead log is a second storage system introduced to survive an
+outage of the first; `droppedCount` in production is the evidence that would justify it.
+
+**Decided in** [ADR 0008](adr/0008-degradation-policy.md). Built in slice 8.
 
 ---
 
@@ -236,6 +245,13 @@ hard requirement, the **Hindi ASR standby** is now the only part of the stack th
 leave the country — and since it only engages during a Sarvam outage, dropping it entirely
 would make the system fully India-resident at the cost of Hindi's one redundant stage. Worth
 knowing before that becomes a compliance conversation rather than a technical one.
+
+**Escalated by slice 8, and now a live product question rather than a planning note.** The
+failover is built and works. It is shipped **disabled by default**
+(`ASR_FAILOVER_ENABLED=false`) precisely because enabling it means a network blip can relocate
+a user's voice out of India, mid-conversation, with nobody having decided that. Somebody who
+owns the data-protection posture has to answer this before the flag is turned on in any
+environment with real users. See [ADR 0008 §6](adr/0008-degradation-policy.md).
 
 ---
 

@@ -318,6 +318,52 @@ zero data loss during a Redis outage.
 and the user never hearing a stack trace. **The Bulbul outage demo is the important one** —
 it proves the accepted single point of failure degrades with dignity rather than silence.
 
+**Built.** Policy in [ADR 0008](adr/0008-degradation-policy.md); mechanism across
+`src/domain/{degradation,backoff,circuit-breaker,asr-failover}.ts`,
+`src/store/guarded-store.ts`, `src/memory/buffered-stream.ts`,
+`src/audio/holding-audio.ts` and `src/providers/deepgram-asr.ts`.
+
+Five decisions here are easy to get backwards, and each has a test that fails if they are:
+
+- **Only failures that END the session are spoken.** A companion announcing "my long-term
+  memory is unavailable" is worse than one that is quietly a little thinner for an evening;
+  going silent with no explanation is worse than either. So `shallow` degradations are logged
+  and never voiced, `mute` ones are voiced once and close the session. The single exception is
+  a failed *turn*, which is answered because the user asked something — the same rule as a
+  failed tool call.
+- **A dependency outage must not become a latency outage.** `ioredis` against a dead server
+  does not fail in the 5 ms the budget allows; it fails after a connect timeout, on every call,
+  on every turn. The stateless path was correct and simply never arrived on time. A circuit
+  breaker makes the discovery happen once, so the companion goes shallow *and fast*.
+- **Queued speech expires.** Buffering text through a TTS reconnect and replaying it produces
+  a bot that is silent for eight seconds and then answers a question the user has moved past.
+  Anything older than three seconds is dropped, and the drop is reported.
+- **Retries stop at the first streamed chunk, and are bounded by the user's patience.** Once a
+  clause has been synthesised, replaying the request makes the bot talk over its own opening.
+  And the loop gives up when the *next* delay would cross the budget, not when attempts run
+  out — three well-spaced retries that land after nine seconds are worse than giving up at two.
+- **Overflow drops the least important event, not the oldest.** Losing a `turn_completed`
+  costs a detail; losing a `correction` leaves a superseded fact standing as current, and a
+  companion confidently repeating something you corrected is worse than one that forgot.
+
+**Two things ship deliberately inert, and both are decisions rather than gaps.**
+
+*ASR failover is off by default* (`ASR_FAILOVER_ENABLED=false`) — not because of the coverage
+hole, but because Deepgram publishes **no India region** while Sarvam is India-resident by
+design. Automatic failover would relocate a user's voice out of the country as a side effect
+of incident response, and a network blip should not be the one making that call
+([Q14](05-open-questions.md#q14-does-deepgram-have-an-india-region-on-any-roadmap)).
+
+*The pre-rendered audio directory is empty.* `npm run render:holding` needs a working Bulbul
+and a live key — you cannot generate it during the outage it exists for. Until it is run and
+committed, a Bulbul outage closes the session **in silence**, which the server logs as an
+explicit error rather than letting it pass as normal.
+
+**What the exit criterion still requires** is what this slice cannot do without credentials
+and hardware: inject each failure into a *live* conversation. The logic is asserted against
+simulated failures — a store that throws, a stream that refuses writes, a socket that will not
+reopen — which proves the policy is coherent, not that the providers fail the way we assumed.
+
 ---
 
 ## Sequencing rationale

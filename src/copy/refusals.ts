@@ -84,6 +84,94 @@ export const COPY: CopyTable = {
     "pa-IN": draft("ਉਸ ਭਾਸ਼ਾ ਵਿੱਚ ਮੈਂ ਸਾਥ ਨਹੀਂ ਦੇ ਸਕਦਾ, ਪਰ ਇਸੇ ਵਿੱਚ ਗੱਲ ਜਾਰੀ ਰੱਖ ਸਕਦੇ ਹਾਂ।"),
     "od-IN": draft("ସେହି ଭାଷାରେ ମୁଁ ସାଥ ଦେଇପାରିବି ନାହିଁ, କିନ୍ତୁ ଏଥିରେ କଥା ଜାରି ରଖିପାରିବା।"),
   },
+
+  // ---------------------------------------------------------------------------
+  // Slice 8 — the three ways this system can lose the ability to hold a
+  // conversation. Only these get spoken; a shallow degradation (no memory, no
+  // tools, no profile) is never announced, because a companion filing an
+  // operations report is worse than one that is quietly a little thinner today.
+  // See src/domain/degradation.ts
+  //
+  // All three are written to be SHORT. They are the last thing the user hears,
+  // they play while something is already broken, and in the voice case they are
+  // pre-rendered — every extra clause is another file to regenerate whenever the
+  // voice changes.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Bulbul is down. THIS ONE CANNOT BE SYNTHESISED — it is rendered ahead of time
+   * and shipped as PCM (src/audio/holding-audio.ts). It deliberately does not
+   * promise a time, because we do not know one.
+   */
+  "degraded.voice_unavailable": {
+    "en-IN": ready("I'm losing my voice — something's wrong on my end. Let's pick this up again shortly."),
+    "hi-IN": ready("मेरी आवाज़ में कुछ दिक्कत आ रही है। थोड़ी देर बाद फिर बात करते हैं।"),
+    "bn-IN": draft("আমার গলায় সমস্যা হচ্ছে। একটু পরে আবার কথা বলি।"),
+    "ta-IN": draft("என் குரலில் ஏதோ சிக்கல். சிறிது நேரம் கழித்து மீண்டும் பேசலாம்."),
+    "te-IN": draft("నా గొంతులో ఏదో సమస్య వచ్చింది. కొంచెం సేపటి తర్వాత మళ్ళీ మాట్లాడుకుందాం."),
+    "gu-IN": draft("મારા અવાજમાં કંઈક તકલીફ થઈ રહી છે. થોડી વાર પછી ફરી વાત કરીએ."),
+    "kn-IN": draft("ನನ್ನ ಧ್ವನಿಯಲ್ಲಿ ಏನೋ ತೊಂದರೆಯಾಗಿದೆ. ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಮಾತನಾಡೋಣ."),
+    "ml-IN": draft("എന്റെ ശബ്ദത്തിന് എന്തോ കുഴപ്പമുണ്ട്. അല്പം കഴിഞ്ഞ് വീണ്ടും സംസാരിക്കാം."),
+    "mr-IN": draft("माझ्या आवाजात काहीतरी अडचण येतेय. थोड्या वेळाने पुन्हा बोलूया."),
+    "pa-IN": draft("ਮੇਰੀ ਆਵਾਜ਼ ਵਿੱਚ ਕੁਝ ਦਿੱਕਤ ਆ ਰਹੀ ਹੈ। ਥੋੜ੍ਹੀ ਦੇਰ ਬਾਅਦ ਫਿਰ ਗੱਲ ਕਰਦੇ ਹਾਂ।"),
+    "od-IN": draft("ମୋ ସ୍ୱରରେ କିଛି ଅସୁବିଧା ହେଉଛି। ଟିକେ ପରେ ପୁଣି କଥା ହେବା।"),
+  },
+
+  /** ASR is gone. We can still speak, so this one is synthesised normally. */
+  "degraded.hearing_unavailable": {
+    "en-IN": ready("I can't hear you at the moment — that's my end, not yours. Let's try again in a bit."),
+    "hi-IN": ready("अभी मुझे आपकी आवाज़ नहीं आ रही — गड़बड़ मेरी तरफ़ है। थोड़ी देर में फिर कोशिश करते हैं।"),
+    "bn-IN": draft("এখন আপনার কথা শুনতে পাচ্ছি না — সমস্যা আমার দিকে। একটু পরে আবার চেষ্টা করি।"),
+    "ta-IN": draft("இப்போது உங்கள் குரல் கேட்கவில்லை — பிரச்சினை என் பக்கம். சிறிது நேரம் கழித்து முயற்சிக்கலாம்."),
+    "te-IN": draft("ప్రస్తుతం మీ మాట వినిపించడం లేదు — సమస్య నా వైపు. కొంచెం సేపటి తర్వాత ప్రయత్నిద్దాం."),
+    "gu-IN": draft("અત્યારે તમારો અવાજ સંભળાતો નથી — તકલીફ મારી બાજુ છે. થોડી વારમાં ફરી પ્રયાસ કરીએ."),
+    "kn-IN": draft("ಈಗ ನಿಮ್ಮ ಧ್ವನಿ ಕೇಳಿಸುತ್ತಿಲ್ಲ — ತೊಂದರೆ ನನ್ನ ಕಡೆ. ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸೋಣ."),
+    "ml-IN": draft("ഇപ്പോൾ നിങ്ങളുടെ ശബ്ദം കേൾക്കുന്നില്ല — കുഴപ്പം എന്റെ ഭാഗത്താണ്. അല്പം കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കാം."),
+    "mr-IN": draft("आत्ता तुमचा आवाज ऐकू येत नाही — अडचण माझ्या बाजूची आहे. थोड्या वेळाने पुन्हा प्रयत्न करूया."),
+    "pa-IN": draft("ਹੁਣ ਮੈਨੂੰ ਤੁਹਾਡੀ ਆਵਾਜ਼ ਨਹੀਂ ਆ ਰਹੀ — ਦਿੱਕਤ ਮੇਰੇ ਪਾਸੇ ਹੈ। ਥੋੜ੍ਹੀ ਦੇਰ ਬਾਅਦ ਫਿਰ ਕੋਸ਼ਿਸ਼ ਕਰਦੇ ਹਾਂ।"),
+    "od-IN": draft("ବର୍ତ୍ତମାନ ଆପଣଙ୍କ ସ୍ୱର ଶୁଣି ପାରୁନାହିଁ — ଅସୁବିଧା ମୋ ପଟେ। ଟିକେ ପରେ ପୁଣି ଚେଷ୍ଟା କରିବା।"),
+  },
+
+  /**
+   * ONE turn failed. The session continues.
+   *
+   * This is the exception to "only announce what ends the session", and the
+   * distinction is worth being precise about: we are not reporting a degraded
+   * state, we are answering the turn. The user asked something and is owed a
+   * response either way — the same rule as a failed tool call. Silence after a
+   * "one moment" filler is the worst of both.
+   */
+  "degraded.turn_failed": {
+    "en-IN": ready("Sorry — I lost that one. Say it again?"),
+    "hi-IN": ready("माफ़ कीजिए, वह मुझसे छूट गया। फिर से कहिए?"),
+    "bn-IN": draft("দুঃখিত, ওটা ধরতে পারিনি। আবার বলবেন?"),
+    "ta-IN": draft("மன்னிக்கவும், அது தவறிவிட்டது. மீண்டும் சொல்லுங்கள்?"),
+    "te-IN": draft("క్షమించండి, అది నాకు అందలేదు. మళ్ళీ చెబుతారా?"),
+    "gu-IN": draft("માફ કરશો, એ મારાથી છૂટી ગયું. ફરી કહેશો?"),
+    "kn-IN": draft("ಕ್ಷಮಿಸಿ, ಅದು ನನಗೆ ಸಿಗಲಿಲ್ಲ. ಮತ್ತೊಮ್ಮೆ ಹೇಳುತ್ತೀರಾ?"),
+    "ml-IN": draft("ക്ഷമിക്കണം, അത് എനിക്ക് കിട്ടിയില്ല. ഒന്നുകൂടി പറയാമോ?"),
+    "mr-IN": draft("क्षमस्व, ते माझ्याकडून सुटलं. पुन्हा सांगाल?"),
+    "pa-IN": draft("ਮਾਫ਼ ਕਰਨਾ, ਉਹ ਮੈਥੋਂ ਰਹਿ ਗਿਆ। ਦੁਬਾਰਾ ਕਹੋਗੇ?"),
+    "od-IN": draft("କ୍ଷମା କରନ୍ତୁ, ତାହା ମୋ ଠାରୁ ଛାଡ଼ି ଗଲା। ପୁଣି କହିବେ କି?"),
+  },
+
+  /**
+   * The LLM is unreachable after backoff, repeatedly. Distinct from a single lost
+   * turn above: this is said once and the session ends.
+   */
+  "degraded.thinking_unavailable": {
+    "en-IN": ready("My head's gone quiet — I can't put an answer together right now. Let's talk again soon."),
+    "hi-IN": ready("अभी मैं जवाब नहीं बना पा रहा हूँ। थोड़ी देर बाद फिर बात करते हैं।"),
+    "bn-IN": draft("এখন আমি উত্তর তৈরি করতে পারছি না। একটু পরে আবার কথা বলি।"),
+    "ta-IN": draft("இப்போது என்னால் பதில் தர முடியவில்லை. சிறிது நேரம் கழித்து மீண்டும் பேசலாம்."),
+    "te-IN": draft("ప్రస్తుతం నేను సమాధానం ఇవ్వలేకపోతున్నాను. కొంచెం సేపటి తర్వాత మళ్ళీ మాట్లాడుకుందాం."),
+    "gu-IN": draft("અત્યારે હું જવાબ આપી શકતો નથી. થોડી વાર પછી ફરી વાત કરીએ."),
+    "kn-IN": draft("ಈಗ ನನಗೆ ಉತ್ತರ ಕೊಡಲು ಆಗುತ್ತಿಲ್ಲ. ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಮಾತನಾಡೋಣ."),
+    "ml-IN": draft("ഇപ്പോൾ എനിക്ക് മറുപടി പറയാൻ കഴിയുന്നില്ല. അല്പം കഴിഞ്ഞ് വീണ്ടും സംസാരിക്കാം."),
+    "mr-IN": draft("आत्ता मला उत्तर देता येत नाहीये. थोड्या वेळाने पुन्हा बोलूया."),
+    "pa-IN": draft("ਹੁਣ ਮੈਂ ਜਵਾਬ ਨਹੀਂ ਬਣਾ ਪਾ ਰਿਹਾ। ਥੋੜ੍ਹੀ ਦੇਰ ਬਾਅਦ ਫਿਰ ਗੱਲ ਕਰਦੇ ਹਾਂ।"),
+    "od-IN": draft("ବର୍ତ୍ତମାନ ମୁଁ ଉତ୍ତର ଦେଇପାରୁ ନାହିଁ। ଟିକେ ପରେ ପୁଣି କଥା ହେବା।"),
+  },
 };
 
 /**

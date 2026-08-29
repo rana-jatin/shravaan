@@ -13,6 +13,26 @@
  *   2. Text messages are capped at 2500 characters, with under 500 recommended
  *      for streaming. The clause chunker upstream keeps us well below both.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * SLICE 8 — RECONNECT, AND THE THING THAT IS EASY TO GET WRONG.
+ *
+ * An idle close is EXPECTED, not an incident: the keepalive misses one beat while
+ * the user is quiet and the socket goes. Reconnecting transparently before the
+ * next chunk is the whole answer, and that part is routine.
+ *
+ * The part that is not routine: **queued speech goes stale.** The obvious
+ * implementation buffers whatever could not be sent and replays it on reconnect.
+ * In a live conversation that produces a bot which is silent for eight seconds
+ * and then delivers an answer to a question the user has already given up on and
+ * moved past. So the queue has an age limit, and text older than it is DROPPED
+ * rather than spoken late. Silence that the orchestrator can see and apologise
+ * for beats a monologue arriving out of time.
+ *
+ * When reconnect exhausts its budget the client emits `unavailable`, which is the
+ * accepted single point of failure becoming real. The session answers that with
+ * pre-rendered audio and a graceful close (src/audio/holding-audio.ts).
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * ⚠ UNVERIFIED: socket path, auth header and message field names — see
  * sarvam-asr.ts header and docs/05-open-questions.md Q12.
  */
@@ -20,10 +40,20 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import type { Config } from "../config/env.ts";
+import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "../domain/backoff.ts";
 
 /** Sarvam's documented idle close is ~60s; ping well inside it. */
 const KEEPALIVE_MS = 25_000;
 const MAX_TEXT_CHARS = 2500;
+
+/**
+ * Text queued while the socket is down is dropped past this age. A reply spoken
+ * three seconds late still lands in the conversation; one spoken ten seconds late
+ * answers a question nobody is still asking.
+ */
+const QUEUE_MAX_AGE_MS = 3000;
+/** Belt and braces on the age limit, for a pathological burst. */
+const QUEUE_MAX_ITEMS = 24;
 
 export type TtsOptions = {
   languageCode: string;
@@ -38,22 +68,39 @@ export interface SarvamTtsEvents {
   done: [];
   error: [Error];
   close: [{ code: number; reason: string }];
+  /** A transparent reconnect is under way. Informational — not yet a failure. */
+  reconnecting: [{ attempt: number; delayMs: number }];
+  /** Reconnect exhausted its budget. The system now has no voice at all. */
+  unavailable: [Error];
+  /** Speech was queued during an outage and discarded for being too old. */
+  dropped: [{ chars: number; ageMs: number }];
 }
 
 export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
   #ws: WebSocket | null = null;
   #keepalive: NodeJS.Timeout | null = null;
+  #reconnectTimer: NodeJS.Timeout | null = null;
   #configured = false;
+  #intentionallyClosed = false;
+  #attempt = 0;
+  #queue: Array<{ text: string; at: number }> = [];
   readonly #cfg: Config;
+  readonly #policy: BackoffPolicy;
   #opts: TtsOptions;
 
-  constructor(cfg: Config, opts: TtsOptions) {
+  constructor(cfg: Config, opts: TtsOptions, policy: BackoffPolicy = SOCKET_RECONNECT) {
     super();
     this.#cfg = cfg;
     this.#opts = opts;
+    this.#policy = policy;
+  }
+
+  get connected(): boolean {
+    return this.#ws?.readyState === WebSocket.OPEN;
   }
 
   connect(): void {
+    this.#intentionallyClosed = false;
     const url = new URL("/text-to-speech/ws", this.#cfg.wsBase);
     url.searchParams.set("model", this.#cfg.ttsModel);
 
@@ -63,8 +110,10 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
     this.#ws = ws;
 
     ws.on("open", () => {
+      this.#attempt = 0;
       this.#sendConfig();
       this.#startKeepalive();
+      this.#drainQueue();
       this.emit("open");
     });
     ws.on("message", (raw) => this.#onMessage(raw));
@@ -73,7 +122,38 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
       this.#stopKeepalive();
       this.#configured = false;
       this.emit("close", { code, reason: reason.toString() });
+      if (!this.#intentionallyClosed) this.#scheduleReconnect(code);
     });
+  }
+
+  /**
+   * Reconnect on backoff. Note the budget is checked against attempts here rather
+   * than wall clock: an idle close during a long pause has no user waiting on it,
+   * so the only thing bounding retries is whether Sarvam is actually reachable.
+   */
+  #scheduleReconnect(closeCode: number): void {
+    if (this.#reconnectTimer) return;
+
+    if (this.#attempt >= this.#policy.maxAttempts) {
+      this.emit(
+        "unavailable",
+        new Error(
+          `Bulbul unreachable after ${this.#attempt} reconnect attempts (last close ${closeCode}). ` +
+            `There is no TTS failover for any Indic language — see docs/adr/0005-tts-provider-split.md`,
+        ),
+      );
+      return;
+    }
+
+    const delayMs = delayFor(this.#attempt, this.#policy);
+    this.#attempt += 1;
+    this.emit("reconnecting", { attempt: this.#attempt, delayMs });
+
+    this.#reconnectTimer = setTimeout(() => {
+      this.#reconnectTimer = null;
+      if (!this.#intentionallyClosed) this.connect();
+    }, delayMs);
+    this.#reconnectTimer.unref?.();
   }
 
   #sendConfig(): void {
@@ -100,7 +180,7 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
    */
   reconfigure(opts: Partial<TtsOptions>): void {
     this.#opts = { ...this.#opts, ...opts };
-    if (this.#ws?.readyState === WebSocket.OPEN) this.#sendConfig();
+    if (this.connected) this.#sendConfig();
   }
 
   speak(text: string): void {
@@ -116,6 +196,11 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
       );
       return;
     }
+
+    if (!this.connected) {
+      this.#enqueue(trimmed);
+      return;
+    }
     if (!this.#configured) this.#sendConfig();
     this.#send({ type: "text", text: trimmed });
   }
@@ -126,9 +211,53 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
   }
 
   close(): void {
+    this.#intentionallyClosed = true;
+    if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = null;
     this.#stopKeepalive();
+    this.#queue = [];
     this.#ws?.close();
     this.#ws = null;
+  }
+
+  /** Abandon queued speech — barge-in, or a turn the orchestrator gave up on. */
+  clearQueue(): void {
+    this.#queue = [];
+  }
+
+  #enqueue(text: string): void {
+    this.#queue.push({ text, at: Date.now() });
+    if (this.#queue.length > QUEUE_MAX_ITEMS) {
+      const dropped = this.#queue.shift();
+      if (dropped) this.emit("dropped", { chars: dropped.text.length, ageMs: 0 });
+    }
+  }
+
+  /**
+   * Replay what is still fresh; discard what is not.
+   *
+   * The drop is the interesting half. Speaking stale text is the failure this
+   * whole queue exists to avoid, so it is emitted as an event rather than
+   * swallowed — the orchestrator needs to know the reply it composed was never
+   * actually heard.
+   */
+  #drainQueue(): void {
+    if (this.#queue.length === 0) return;
+    const now = Date.now();
+    const pending = this.#queue;
+    this.#queue = [];
+
+    let spoke = false;
+    for (const item of pending) {
+      const ageMs = now - item.at;
+      if (ageMs > QUEUE_MAX_AGE_MS) {
+        this.emit("dropped", { chars: item.text.length, ageMs });
+        continue;
+      }
+      this.#send({ type: "text", text: item.text });
+      spoke = true;
+    }
+    if (spoke) this.flush();
   }
 
   #onMessage(raw: WebSocket.RawData): void {

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "dev": "node --experimental-strip-types --env-file=.env src/server.ts",
-    "start": "node --experimental-strip-types --env-file=.env src/server.ts"
+    "start": "node --experimental-strip-types --env-file=.env src/server.ts",
+    "render:holding": "node --experimental-strip-types --env-file=.env scripts/render-holding-audio.ts"
   },
   "dependencies": {
     "ioredis": "^6.0.0",

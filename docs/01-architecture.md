@@ -331,17 +331,25 @@ never today's turn.
 
 ## 6. Degradation
 
+Policy — which failures are spoken, which are absorbed, and how that is decided — is
+[ADR 0008](adr/0008-degradation-policy.md). The one-line version: **only a failure that ends
+the session is ever announced to the user.** Everything else is logged and survived, because a
+companion narrating its own infrastructure is worse than one that is quietly a little thinner
+for an evening — and going silent with no explanation is worse than either.
+
 | Failure | Response | Feasibility |
 |---|---|---|
 | Low ASR confidence | Targeted reprompt naming the uncertain slot | **Not implementable as specified on Sarvam** — no ASR confidence field is documented. Substitute: LLM-side slot uncertainty, or a confirmation policy on high-stakes slots. See [05](05-open-questions.md) |
-| ASR provider timeout | Fail over to Deepgram `flux-general-multi` | **Hindi only.** The other 9 speakable languages have no second ASR |
+| ASR provider timeout | Reconnect first; fail over to Deepgram `flux-general-multi` from the second consecutive failure | **`hi-IN` and `en-IN` only**; the other 9 have no second ASR. **Off by default** — Deepgram has no India region, so failover relocates audio out of the country ([ADR 0008 §6](adr/0008-degradation-policy.md)) |
 | **TTS outage** | **No failover exists.** Pre-rendered holding audio, then graceful close | Accepted single point of failure for every session ([ADR 0005](adr/0005-tts-provider-split.md)) |
 | Unspeakable language detected at open | Refuse in a language we *can* speak, do not start | The 12 heard-but-unspeakable languages. There is no voice to apologise in afterwards |
 | Mid-session switch into an unspeakable language | Continue in the previous language, acknowledge the limit once | The user may switch to Urdu mid-conversation. Silence is the failure mode to avoid |
-| Redis down | Continue stateless on JSON context only. No turn window, no profile | The companion becomes shallow but stays alive |
+| Redis down | Continue stateless on JSON context only. No turn window, no profile | The companion becomes shallow but stays alive. **Behind a circuit breaker** — otherwise the outage costs a connect timeout on every call of every turn, and a dependency outage becomes a latency outage |
 | Tool failure | Spoken fallback; clear the `sess:{sid}:pending` entry | — |
-| LLM 429 | Backoff with jitter; spoken filler if it exceeds one turn budget | Expected under load — this is the binding limit |
-| TTS socket idle-closed | Reconnect transparently before the next chunk | Sarvam closes after ~1 min idle; likely during companion pauses |
+| LLM 429 | Jittered backoff, bounded by a 2.5 s budget; filler once the silence is real; retries stop at the first streamed chunk | Expected under load — this is the binding limit, and it is **per account**, so it trips for every live session at once |
+| LLM unreachable for 3 consecutive turns | Say so once, then close | A single lost turn is answered and survived; three is not a conversation |
+| TTS socket idle-closed | Reconnect transparently before the next chunk; **discard queued speech older than 3 s** | Sarvam closes after ~1 min idle; likely during companion pauses. Speaking stale text answers a question the user has moved past |
+| `mem:writes` unavailable | Bounded in-process buffer; overflow drops the oldest low-priority event and counts it | Resolves [Q7](05-open-questions.md#q7-does-memwrites-get-buffered-during-a-redis-outage-or-is-the-gap-accepted). The backlog does not survive a crash — accepted, not hidden |
 
 ---
 

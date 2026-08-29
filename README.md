@@ -12,19 +12,22 @@ Start with [docs/01-architecture.md](docs/01-architecture.md).
 
 **Slice 1** (end-to-end exchange) · **Slice 2, server half** (echo guard) ·
 **Slice 3** (working memory) · **Slice 4** (continuity across days) ·
-**Slice 6** (tools and fillers) · **Slice 7** (speakability gate).
+**Slice 6** (tools and fillers) · **Slice 7** (speakability gate) ·
+**Slice 8** (degradation).
 See [docs/04-milestones.md](docs/04-milestones.md) for the full slice plan.
 
 | Built | Not yet |
 |---|---|
 | Device WebSocket transport | **AEC (device side — needs hardware)** |
 | Sarvam ASR / LLM / TTS clients | Wake word |
-| Turn state machine + barge-in | Deepgram Hindi ASR standby |
-| **Speakability gate — all three gates** | Degradation drills (slice 8) |
-| **Echo guard — the self-interruption defence** | **Durable memory backend ([ADR 0004](docs/adr/0004-vector-store.md) still Proposed)** |
-| **Working memory: 12-turn window, idle TTLs, turn lock, resume** | **A real multilingual embedder** |
+| Turn state machine + barge-in | **Pre-rendered outage audio (needs a live key — `npm run render:holding`)** |
+| **Speakability gate — all three gates** | **Durable memory backend ([ADR 0004](docs/adr/0004-vector-store.md) still Proposed)** |
+| **Echo guard — the self-interruption defence** | **A real multilingual embedder** |
+| **Working memory: 12-turn window, idle TTLs, turn lock, resume** | Live failure injection (slice 8's exit criterion) |
 | **Long-term memory: `mem:writes`, distiller, supersede/soft-delete, profile** | |
 | **Tools: entitlement gating, deadlines, rotating fillers** | |
+| **Degradation: ledger, circuit breaker, jittered backoff, buffered `mem:writes`** | |
+| **Deepgram Flux ASR standby** (`hi-IN`/`en-IN`, off by default) | |
 | Clause chunker (streams TTS at clause boundaries) | |
 | Spoken copy in 11 languages | |
 
@@ -78,8 +81,9 @@ succeeds, the LLM succeeds, and the user hears nothing.
 npm install
 cp .env.example .env      # add SARVAM_API_KEY
 npm run typecheck
-npm test                  # 116 tests, no credentials needed
+npm test                  # 213 tests, no credentials needed
 npm run dev               # device WebSocket server on :8080
+npm run render:holding    # needs a live key — see "before a Bulbul outage" below
 ```
 
 Requires Node ≥ 22.6 (uses native TypeScript type stripping — no build step).
@@ -96,6 +100,32 @@ REDIS_URL=redis://localhost:6379 npm test    # runs the contract against both st
 
 Do that before trusting the Redis path. The in-memory store passing proves the
 contract is coherent, not that `ioredis` behaves as assumed.
+
+---
+
+## ⚠ Before a Bulbul outage, not during one
+
+Bulbul is the only voice in this system and there is **no Indic TTS failover**
+anywhere in either provider ([ADR 0005](docs/adr/0005-tts-provider-split.md)). When
+it goes, the one message worth saying is the one message that cannot be
+synthesised — so it is rendered ahead of time and shipped as bytes:
+
+```bash
+npm run render:holding    # writes assets/holding/*.pcm + manifest.json
+```
+
+`assets/holding/` **is currently empty.** Until it is generated and committed, a
+Bulbul outage closes the session in silence; the server logs
+`no pre-rendered audio — closing in silence` rather than letting that pass as
+normal. Regenerate whenever `TTS_SPEAKER` or the copy changes, or the apology
+arrives in a different voice from the rest of the conversation.
+
+**ASR failover is off by default, and not because of the coverage gap.** Deepgram
+Flux reaches `hi-IN` and `en-IN` of our eleven — but it also publishes **no India
+region**, while Sarvam is India-resident by design. Enabling
+`ASR_FAILOVER_ENABLED=true` means a network blip can relocate a user's voice out
+of the country mid-conversation. That is a decision for whoever owns the
+data-protection posture ([Q14](docs/05-open-questions.md)).
 
 ---
 
@@ -134,12 +164,21 @@ src/
     turn-state.ts       provider-agnostic turn state machine
     clause-chunker.ts   streams TTS at clause boundaries
     redis-keys.ts       key formats + TTLs (idle windows, not call lengths)
+    degradation.ts      what is broken, and whether we can still talk
+    backoff.ts          jittered retry, bounded by the user's patience
+    circuit-breaker.ts  stops an outage becoming a latency problem
+    asr-failover.ts     which languages actually have a second ASR (two)
     types.ts            mirrors docs/02-data-contracts.md
-  providers/            Sarvam ASR / LLM / TTS — raw WebSocket, not the SDK
+  providers/            raw WebSocket, not the SDK
+    sarvam-{asr,llm,tts}.ts
+    deepgram-asr.ts     Flux standby — hi-IN/en-IN, hearing only
   orchestrator/
-    session.ts          turn loop, gates, barge-in
-  copy/refusals.ts      refusal copy, 11 languages
+    session.ts          turn loop, gates, barge-in, degradation
+  audio/holding-audio.ts  pre-rendered apology for a TTS outage
+  copy/refusals.ts      refusal + closing copy, 11 languages
   server.ts             device-facing WebSocket server
+scripts/
+  render-holding-audio.ts  build-time; needs a working Bulbul
 ```
 
 **Why raw WebSockets instead of Sarvam's SDK:** their docs state the JavaScript SDK
@@ -188,6 +227,11 @@ product, so we speak the protocol directly.
 - **The memory worker is single-replica.** Its idempotency ledger is in-process;
   two workers would duplicate facts. See Q6b in
   [docs/05-open-questions.md](docs/05-open-questions.md).
+- **The degradation paths have never met a real failure.** Slice 8's logic is
+  asserted against simulated ones — a store that throws, a stream that refuses
+  writes, a socket that will not reopen. That proves the policy is coherent, not
+  that the providers fail the way we assumed. Its exit criterion is injecting each
+  failure into a live conversation, and that needs credentials.
 - **Latency is unmeasured.** The budget in
   [docs/03-latency-budget.md](docs/03-latency-budget.md) is hypotheses with named
   consequences — a realistic estimate lands at ~945 ms against an 800 ms target,

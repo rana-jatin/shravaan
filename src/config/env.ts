@@ -103,6 +103,43 @@ export function loadConfig() {
      */
     redisUrl: process.env["REDIS_URL"]?.trim() || null,
 
+    // --- Degradation (slice 8) ------------------------------------------------
+
+    /**
+     * ASR failover to Deepgram Flux. Covers `hi-IN` and `en-IN` ONLY; nine of our
+     * eleven languages have no second ASR at all.
+     *
+     * OFF BY DEFAULT, AND NOT BECAUSE OF THE COVERAGE GAP.
+     *
+     * Sarvam's pitch includes "Data residency in India"
+     * (https://docs.sarvam.ai/conversations/overview.md). Deepgram publishes EU
+     * and AU endpoints and **no India region**
+     * (https://deepgram.com/learn/deepgram-eu-endpoint-now-generally-available).
+     * So an automatic failover quietly relocates a user's voice out of the
+     * country, mid-conversation, as an incident-response side effect. That is a
+     * decision for whoever owns the data-protection posture, not a default.
+     * See docs/05-open-questions.md Q14.
+     */
+    asrFailoverEnabled: opt("ASR_FAILOVER_ENABLED", "false") === "true",
+    deepgramApiKey: process.env["DEEPGRAM_API_KEY"]?.trim() || null,
+    deepgramWsBase: opt("DEEPGRAM_WS_BASE", "wss://api.deepgram.com"),
+    /** Flux Multilingual: the only Deepgram streaming model that reaches Hindi. */
+    deepgramModel: opt("DEEPGRAM_ASR_MODEL", "flux-general-multi"),
+
+    /**
+     * Pre-rendered apology audio for a Bulbul outage. Generated ahead of time by
+     * `npm run render:holding` — you cannot render it during the outage it exists
+     * for. See src/audio/holding-audio.ts
+     */
+    holdingAudioDir: opt("HOLDING_AUDIO_DIR", "assets/holding"),
+
+    /**
+     * Bounded in-process buffer for `mem:writes` when the stream is unreachable.
+     * Overflow drops the oldest low-priority event and counts it — the decision
+     * docs/02-data-contracts.md section 6 left open, resolved in ADR 0008.
+     */
+    memWriteBufferCapacity: num("MEM_WRITE_BUFFER", 500),
+
     port: num("PORT", 8080),
     logLevel: opt("LOG_LEVEL", "info"),
   };

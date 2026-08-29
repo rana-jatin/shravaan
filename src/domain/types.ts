@@ -40,7 +40,19 @@ export type GateDecision = {
   message_key?: MessageKey;
 };
 
-export type MessageKey = "gate.unsupported_language" | "gate.switch_declined";
+/**
+ * `gate.*` keys come from the speakability gate. `degraded.*` keys come from
+ * slice 8 and are spoken ONLY when a degradation ends the session — see
+ * src/domain/degradation.ts for why shallow degradations stay silent.
+ */
+export type MessageKey =
+  | "gate.unsupported_language"
+  | "gate.switch_declined"
+  | "degraded.voice_unavailable"
+  | "degraded.hearing_unavailable"
+  | "degraded.thinking_unavailable"
+  /** The exception: announces a failed TURN, not a degraded state. */
+  | "degraded.turn_failed";
 
 // ---------------------------------------------------------------------------
 // JSON context — read-only, from our backend

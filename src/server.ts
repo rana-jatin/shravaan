@@ -23,6 +23,7 @@ import { MemorySessionStore } from "./store/memory-store.ts";
 import { RedisSessionStore } from "./store/redis-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
 import { InMemoryMemWriteStream } from "./memory/stream.ts";
+import { BufferedMemWriteStream } from "./memory/buffered-stream.ts";
 import { InMemoryLongTermStore } from "./memory/in-memory-long-term-store.ts";
 import { HashingEmbedder } from "./memory/long-term-store.ts";
 import { LlmDistiller } from "./memory/distiller.ts";
@@ -30,6 +31,9 @@ import { MemoryWorker } from "./memory/worker.ts";
 import { SarvamLlm } from "./providers/sarvam-llm.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { pendingCopyReview } from "./copy/fillers.ts";
+import { GuardedSessionStore } from "./store/guarded-store.ts";
+import { HoldingAudio } from "./audio/holding-audio.ts";
+import { redundancyProfile } from "./domain/asr-failover.ts";
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}): void {
   const line = { t: new Date().toISOString(), level, msg, ...extra };
@@ -60,9 +64,13 @@ export function start(): ServerHandle {
     });
   }
 
-  const store: SessionStore = cfg.redisUrl
-    ? new RedisSessionStore(cfg.redisUrl)
-    : new MemorySessionStore();
+  // Behind a circuit breaker so a Redis outage costs one round trip, not one per
+  // call per turn. The degraded path was always specified; the breaker is what
+  // makes it arrive on time. See src/store/guarded-store.ts
+  const store: SessionStore = new GuardedSessionStore(
+    cfg.redisUrl ? new RedisSessionStore(cfg.redisUrl) : new MemorySessionStore(),
+    { log },
+  );
 
   if (!cfg.redisUrl) {
     log("warn", "no REDIS_URL — using in-process working memory", {
@@ -72,7 +80,15 @@ export function start(): ServerHandle {
 
   // Long-term memory. In-process by default; ADR 0004 (Postgres + pgvector) is
   // still Proposed, so the durable backend is deliberately not wired yet.
-  const memStream = new InMemoryMemWriteStream();
+  //
+  // The buffer resolves the decision docs/02 section 6 left open: bounded, drops
+  // the oldest low-priority event on overflow, and counts every drop.
+  const memStream = new BufferedMemWriteStream(new InMemoryMemWriteStream(), {
+    capacity: cfg.memWriteBufferCapacity,
+    log,
+    onStateChange: (buffering) =>
+      log(buffering ? "warn" : "info", "mem:writes buffering", { buffering }),
+  });
   const longTerm = new InMemoryLongTermStore(new HashingEmbedder());
   const worker = new MemoryWorker({
     stream: memStream,
@@ -92,6 +108,28 @@ export function start(): ServerHandle {
   // deadlines are handled by the registry and executor. An empty registry means
   // the model is simply offered no tools.
   const tools = new ToolRegistry();
+
+  // The apology for a Bulbul outage, rendered ahead of time — the one message
+  // that cannot be synthesised, because synthesis is what broke.
+  const holdingAudio = new HoldingAudio({
+    dir: cfg.holdingAudioDir,
+    expectedSampleRate: cfg.ttsSampleRate,
+    log,
+  });
+  holdingAudio.load();
+
+  // State the availability profile at boot rather than during an incident.
+  const redundancy = redundancyProfile(SPEAKABLE.map((l) => l.code));
+  log(cfg.asrFailoverEnabled ? "info" : "warn", "asr failover", {
+    enabled: cfg.asrFailoverEnabled,
+    key_present: cfg.deepgramApiKey !== null,
+    redundant_languages: redundancy.redundant,
+    single_vendor_languages: redundancy.singleVendor.length,
+    tts_failover: "none, for any language — docs/adr/0005-tts-provider-split.md",
+    residency: cfg.asrFailoverEnabled
+      ? "ENABLED: a failover sends audio to Deepgram, which publishes no India region"
+      : "disabled by default; enabling relocates audio out of India (docs/05 Q14)",
+  });
 
   const wss = new WebSocketServer({ port: cfg.port });
   log("info", "listening", {
@@ -125,6 +163,7 @@ export function start(): ServerHandle {
           store,
           memStream,
           tools,
+          holdingAudio,
           // fetchContext: wire your backend here. Without it, entitlement-gated
           // tools are withheld rather than offered unverified.
           uid: String(msg["uid"] ?? "anonymous"),
@@ -156,6 +195,10 @@ export function start(): ServerHandle {
     wss,
     shutdown() {
       worker.stop();
+      // One last drain attempt. A buffered backlog dies with the process — that
+      // is what "bounded in-process buffer" means, and it is stated plainly in
+      // docs/adr/0008-degradation-policy.md rather than discovered.
+      void memStream.close().catch(() => {});
       wss.close();
     },
   };
