@@ -61,6 +61,13 @@ export function loadConfig() {
     );
   }
 
+  // Parsed ONCE each. Every one of these was previously parsed twice — once for
+  // the pairs and again for the orphans — which is two chances for the two
+  // halves to disagree about what a value contained.
+  const news = parsePairs(process.env["NEWS_FEEDS"]);
+  const calendars = parsePairs(process.env["CALENDAR_FEEDS"]);
+  const googleCalendars = parsePairs(process.env["GOOGLE_CALENDAR_IDS"]);
+
   return {
     defaultSeedLanguage: opt("DEFAULT_SEED_LANGUAGE", "hi-IN"),
     /**
@@ -310,7 +317,7 @@ export function loadConfig() {
        * no way to verify a feed it has never fetched — the same honesty the
        * Sarvam API bases carry above (Q12).
        */
-      feeds: parsePairs(process.env["NEWS_FEEDS"]).pairs,
+      feeds: news.pairs,
       /**
        * Comma-separated segments that carried no `=`, in order.
        *
@@ -319,7 +326,7 @@ export function loadConfig() {
        * here. Surfaced rather than dropped because the alternative is a feed that
        * 404s at request time with nothing in the log pointing at the config.
        */
-      feedsDropped: parsePairs(process.env["NEWS_FEEDS"]).dropped,
+      feedsDropped: news.dropped,
       headlineLimit: num("NEWS_HEADLINE_LIMIT", 5),
     },
 
@@ -407,8 +414,8 @@ export function loadConfig() {
        *
        *   CALENDAR_FEEDS="mine=https://calendar.google.com/calendar/ical/.../basic.ics"
        */
-      feeds: parsePairs(process.env["CALENDAR_FEEDS"]).pairs,
-      feedsDropped: parsePairs(process.env["CALENDAR_FEEDS"]).dropped,
+      feeds: calendars.pairs,
+      feedsDropped: calendars.dropped,
       eventLimit: num("CALENDAR_EVENT_LIMIT", 6),
       /**
        * Google Calendar API v3 — the upgrade over the iCal feed.
@@ -422,8 +429,8 @@ export function loadConfig() {
        * calendar is their Gmail address, and "primary" works ONLY with a
        * credential that has a user identity (never an API key).
        */
-      googleIds: parsePairs(process.env["GOOGLE_CALENDAR_IDS"]).pairs,
-      googleIdsDropped: parsePairs(process.env["GOOGLE_CALENDAR_IDS"]).dropped,
+      googleIds: googleCalendars.pairs,
+      googleIdsDropped: googleCalendars.dropped,
       /**
        * ⚠ AN API KEY READS PUBLIC CALENDARS AND NOTHING ELSE.
        *

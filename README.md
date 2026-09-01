@@ -110,16 +110,31 @@ succeeds, the LLM succeeds, and the user hears nothing.
 ```bash
 npm install
 cp .env.example .env      # add SARVAM_API_KEY
-npm run typecheck
-npm test                  # 579 tests, no credentials needed
+npm run check             # format + lint + typecheck + test, in that order
 npm run dev               # device WebSocket server on :8080
-npm run render:holding    # needs a live key — see "before a Bulbul outage" below
-npm run verify:tools      # needs a live key — re-checks the tool-calling contract
-npm run verify:care       # needs a Deepgram key — checks /v1/read before you trust a trend
-npm run verify:asr        # needs a Deepgram key — proves the ASR standby can actually hear
+npm run device            # the other half: mic in, speaker out (needs ffmpeg)
 ```
 
 Requires Node ≥ 22.6 (uses native TypeScript type stripping — no build step).
+
+`npm run check` is what CI runs. The parts are also available on their own:
+
+| Command | What it does |
+|---|---|
+| `npm test` | 616 tests. **No credentials, no network** — every provider and tool takes an injectable client, so the suite must never need a key. |
+| `npm run typecheck` | `tsc --noEmit`, strict, with `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. |
+| `npm run lint` | eslint, type-checked rules. Tuned for defects, not style. |
+| `npm run format` | prettier. Markdown is deliberately excluded — see `.prettierignore`. |
+
+These need a real key and are **not** part of `check`:
+
+| Command | What it proves |
+|---|---|
+| `npm run render:holding` | Renders the outage apology. Needs a working Bulbul — see below. |
+| `npm run verify:tools` | Re-checks the tool-calling contract against the live model. |
+| `npm run verify:care` | Checks `/v1/read` field names before you trust a trend. |
+| `npm run verify:asr` | Proves the ASR standby can actually hear. |
+| `npm run verify:alert` | Sends one real alert, to prove the emergency path delivers. |
 
 **Working memory** falls back to an in-process store when `REDIS_URL` is unset —
 fine for development, useless across restarts or replicas. Setting it also enables
@@ -336,9 +351,18 @@ buffered audio lives on the device, so only the device can drop it.
 
 ```
 src/
+  server.ts             device-facing WebSocket server: protocol, boot order,
+                        socket lifecycle. Wiring lives in composition/.
+  composition/          how a deployment is assembled — one module per concern,
+                        each returning what the boot log needs to report
+    memory.ts           store, mem:writes, long-term store, worker
+    tools.ts            registry + which tools this deployment actually has
+    calendars.ts        iCal and Google, read and the three-way write gate
+    alerting.ts         contacts, mail transport, the alerter
+    url.ts              isHttpUrl + redactUrl (a feed URL IS the credential)
   config/
     languages.json      the matrix — SINGLE source of truth, do not duplicate
-    env.ts              boot-time validation of the non-negotiable audio rates
+    env.ts              boot-time validation; Config is nested by concern
   domain/               pure, no I/O, fully unit-tested
     languages.ts        speakability verdict
     gate.ts             gates 1, 2, 3
@@ -350,28 +374,49 @@ src/
     circuit-breaker.ts  stops an outage becoming a latency problem
     asr-failover.ts     which languages actually have a second ASR (two)
     care-signals.ts     the English gate, the watch-list, the trend
+    ical.ts             enough iCalendar to read a diary aloud
     types.ts            mirrors docs/02-data-contracts.md
   providers/            raw WebSocket, not the SDK
     sarvam-{asr,llm,tts}.ts
     deepgram-asr.ts     Flux standby — hi-IN/en-IN, hearing only
     deepgram-read.ts    /v1/read — batch, off the voice path entirely
-    http.ts             the injectable fetch surface, one place
+    factories.ts        the ONLY place outside server.ts naming a concrete
+                        provider — which is what makes the turn loop testable
+    http.ts             the injectable fetch surface + getText/getJson
   memory/
     worker.ts           consumes mem:writes, distils, commits
+    stream.ts           mem:writes — in-memory, plus an UNWIRED Redis stream
     care-signals-analyser.ts  gate → call → map, bounded, never throws
   orchestrator/
-    session.ts          turn loop, gates, barge-in, degradation
+    session.ts          the turn loop: gates, barge-in, tool rounds, degradation
+    session-deps.ts     what a Session is handed, and the five bounds it obeys
+    prompt.ts           buildMessages + profileBlock — pure, and tested directly
+    media-controller.ts what is playing on the device
   audio/holding-audio.ts  pre-rendered apology for a TTS outage
   copy/refusals.ts      refusal + closing copy, 11 languages
   tools/
-    builtin.ts          the 8 session-only tools
+    builtin.ts          the 8 session-only tools (no key, no network)
+    external.ts         what every leaves-the-process tool shares, and why
+    weather.ts news.ts wellbeing.ts music.ts calendar.ts emergency.ts
     registry.ts         entitlement gating + strict schema emission
     executor.ts         deadlines, fillers, pending tracking
-  server.ts             device-facing WebSocket server
+    types.ts            tool contracts + the deadline tiers
 scripts/
+  device-client.ts         the other half of the demo: mic in, speaker out
   render-holding-audio.ts  build-time; needs a working Bulbul
-  verify-tool-calling.ts   probes the tool-calling contract against a live key
+  verify-*.ts              probe a live provider contract with a real key
 ```
+
+**Why the composition/ split:** `start()` was 500 lines of sequential wiring.
+Each module there takes `cfg` and a log and returns what it built, so the boot
+sequence reads as a table of contents and each gate is reachable from a test
+without opening a WebSocket server.
+
+**Why `session.ts` is still ~1600 lines:** because the turn loop is one machine.
+The pieces with a real seam came out — the deps type, message building, media
+control. `#openAsr` did not: it touches fourteen pieces of `Session`'s private
+state including five sibling methods, so extracting it buys an indirection tax
+and no boundary. Size is not the metric; coupling is.
 
 **Why raw WebSockets instead of Sarvam's SDK:** their docs state the JavaScript SDK
 "silently drops" the `mode` parameter, so every connection runs as plain
