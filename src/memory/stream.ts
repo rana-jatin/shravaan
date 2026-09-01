@@ -78,6 +78,21 @@ export class InMemoryMemWriteStream implements MemWriteStream {
 
 const GROUP = "mem-workers";
 
+/**
+ * NOT WIRED YET. `src/server.ts` selects `InMemoryMemWriteStream`
+ * unconditionally, even when REDIS_URL is set — so today the stream this class
+ * implements does not exist at runtime and `mem:writes` dies with the process.
+ *
+ * That is a gap, not a decision. docs/02-data-contracts.md section 3 specifies
+ * `mem:writes` AS a Redis Stream, and this is that spec: consumer group,
+ * at-least-once delivery, MAXLEN trim. The neighbouring `SessionStore` already
+ * switches on `cfg.redisUrl`; this never got the same treatment.
+ *
+ * It is unwired rather than deleted because the code is correct and the spec
+ * still wants it. Before wiring it, note that turning it on makes a previously
+ * unexercised path live for every deployment with REDIS_URL set — which is why
+ * test/store.test.ts now covers it against a fake client.
+ */
 export class RedisMemWriteStream implements MemWriteStream {
   readonly #redis: Redis;
   #groupReady = false;

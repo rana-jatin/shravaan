@@ -152,6 +152,13 @@ export function start(): ServerHandle {
   //
   // The buffer resolves the decision docs/02 section 6 left open: bounded, drops
   // the oldest low-priority event on overflow, and counts every drop.
+  //
+  // NOTE the asymmetry with `store` above, which DOES switch on cfg.redisUrl:
+  // the stream is in-process even when Redis is available, so `mem:writes` does
+  // not survive a restart and cannot be shared across replicas. That contradicts
+  // docs/02 section 3, which specifies it as a Redis Stream.
+  // `RedisMemWriteStream` implements that spec and is ready; swapping it in here
+  // is the whole change. Left unwired deliberately — see the note on the class.
   const memStream = new BufferedMemWriteStream(new InMemoryMemWriteStream(), {
     capacity: cfg.memWriteBufferCapacity,
     log,

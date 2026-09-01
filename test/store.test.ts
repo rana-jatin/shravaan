@@ -14,8 +14,16 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { TTL, TURN_WINDOW } from "../src/domain/redis-keys.ts";
-import type { JsonContext, Profile, SessionState, Turn } from "../src/domain/types.ts";
+import type {
+  JsonContext,
+  MemWriteEvent,
+  Profile,
+  SessionState,
+  Turn,
+} from "../src/domain/types.ts";
 import { MemorySessionStore } from "../src/store/memory-store.ts";
+import { RedisMemWriteStream } from "../src/memory/stream.ts";
+import { MEM_WRITES_MAXLEN } from "../src/domain/redis-keys.ts";
 import { NullSessionStore, type SessionStore } from "../src/store/session-store.ts";
 
 const REDIS_URL = process.env["REDIS_URL"];
@@ -283,5 +291,209 @@ describe("degraded path: NullSessionStore", () => {
     const s = new NullSessionStore();
     assert.equal(await s.acquireLock("x", "a"), true);
     assert.equal(await s.acquireLock("x", "b"), true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * `RedisMemWriteStream` against a fake client.
+ *
+ * This class ships the docs/02 section 3 contract — consumer group, at-least-once
+ * delivery, MAXLEN trim — and `src/server.ts` does not wire it (see the note on
+ * the class). Untested AND unwired is how a feature rots; these tests cover the
+ * parts that would bite on the day someone does wire it, without needing Redis.
+ *
+ * The fake records commands rather than emulating Redis. That is deliberate: the
+ * risk in this class is the ARGUMENTS it sends — a missing MKSTREAM, a `$` where
+ * `>` belongs — and those are exactly what a recording fake can assert on.
+ */
+type Cmd = [string, ...unknown[]];
+
+function fakeRedis(over: Partial<Record<string, (...a: any[]) => unknown>> = {}) {
+  const cmds: Cmd[] = [];
+  const rec =
+    (name: string, ret: unknown = "ok") =>
+    (...args: unknown[]) => {
+      cmds.push([name, ...args]);
+      return Promise.resolve(ret);
+    };
+  const client = {
+    xgroup: rec("xgroup"),
+    xadd: rec("xadd", "1-0"),
+    xreadgroup: rec("xreadgroup", null),
+    xack: rec("xack", 1),
+    xpending: rec("xpending", [0]),
+    quit: rec("quit"),
+    ...over,
+  };
+  return { client, cmds };
+}
+
+const evt = (id: string): MemWriteEvent => ({
+  event_id: id,
+  sid: "s1",
+  uid: "u1",
+  tid: 1,
+  at: new Date().toISOString(),
+  kind: "explicit_recall",
+  user_text: `fact ${id}`,
+});
+
+describe("RedisMemWriteStream (unwired — see src/memory/stream.ts)", () => {
+  it("appends with a MAXLEN cap so the stream cannot grow without bound", async () => {
+    const { client, cmds } = fakeRedis();
+    const s = new RedisMemWriteStream(client as never);
+
+    await s.append(evt("e1"));
+
+    const xadd = cmds.find((c) => c[0] === "xadd");
+    assert.ok(xadd, "expected an XADD");
+    assert.ok(xadd.includes("MAXLEN"), "XADD must cap the stream");
+    assert.ok(xadd.includes("~"), "approximate trim — exact trim is O(n) per write");
+    assert.equal(xadd[xadd.indexOf("MAXLEN") + 2], MEM_WRITES_MAXLEN);
+  });
+
+  it("creates the consumer group with MKSTREAM before the first read", async () => {
+    const { client, cmds } = fakeRedis();
+    const s = new RedisMemWriteStream(client as never);
+
+    await s.read("c1", 10, 0);
+
+    const xgroup = cmds.find((c) => c[0] === "xgroup");
+    assert.ok(xgroup, "expected XGROUP CREATE");
+    assert.ok(
+      xgroup.includes("MKSTREAM"),
+      "without MKSTREAM the group cannot be created before the first write",
+    );
+  });
+
+  it("tolerates BUSYGROUP — another replica created the group first", async () => {
+    const { client } = fakeRedis({
+      xgroup: () => Promise.reject(new Error("BUSYGROUP Consumer Group name already exists")),
+    });
+    const s = new RedisMemWriteStream(client as never);
+
+    await assert.doesNotReject(() => s.read("c1", 10, 0));
+  });
+
+  it("propagates a real XGROUP failure rather than pretending the group exists", async () => {
+    const { client } = fakeRedis({
+      xgroup: () => Promise.reject(new Error("NOAUTH Authentication required")),
+    });
+    const s = new RedisMemWriteStream(client as never);
+
+    await assert.rejects(() => s.read("c1", 10, 0), /NOAUTH/);
+  });
+
+  it("creates the group once, not once per read", async () => {
+    const { client, cmds } = fakeRedis();
+    const s = new RedisMemWriteStream(client as never);
+
+    await s.read("c1", 10, 0);
+    await s.read("c1", 10, 0);
+    await s.read("c1", 10, 0);
+
+    assert.equal(cmds.filter((c) => c[0] === "xgroup").length, 1);
+  });
+
+  it("reads NEW entries only — `>` and not `$`", async () => {
+    const { client, cmds } = fakeRedis();
+    const s = new RedisMemWriteStream(client as never);
+
+    await s.read("worker-7", 25, 500);
+
+    const rg = cmds.find((c) => c[0] === "xreadgroup");
+    assert.ok(rg);
+    assert.equal(rg.at(-1), ">", "`$` would skip everything appended before this read");
+    assert.ok(rg.includes("worker-7"), "consumer name must reach Redis for XPENDING to work");
+    assert.equal(rg[rg.indexOf("COUNT") + 1], 25);
+    assert.equal(rg[rg.indexOf("BLOCK") + 1], 500);
+  });
+
+  it("parses entries out of the XREADGROUP reply shape", async () => {
+    const { client } = fakeRedis({
+      xreadgroup: () =>
+        Promise.resolve([
+          [
+            "mem:writes",
+            [
+              ["1-1", ["event", JSON.stringify(evt("a"))]],
+              ["1-2", ["event", JSON.stringify(evt("b"))]],
+            ],
+          ],
+        ]),
+    });
+    const s = new RedisMemWriteStream(client as never);
+
+    const got = await s.read("c1", 10, 0);
+
+    assert.deepEqual(
+      got.map((e) => e.id),
+      ["1-1", "1-2"],
+    );
+    assert.equal(got[0]!.event.event_id, "a");
+  });
+
+  it("drops a corrupt entry instead of wedging the consumer group forever", async () => {
+    const { client } = fakeRedis({
+      xreadgroup: () =>
+        Promise.resolve([
+          [
+            "mem:writes",
+            [
+              ["1-1", ["event", "{not json"]],
+              ["1-2", ["event", JSON.stringify(evt("good"))]],
+            ],
+          ],
+        ]),
+    });
+    const s = new RedisMemWriteStream(client as never);
+
+    const got = await s.read("c1", 10, 0);
+
+    assert.equal(got.length, 1, "the good entry still arrives");
+    assert.equal(got[0]!.event.event_id, "good");
+  });
+
+  it("returns [] on an empty stream rather than throwing", async () => {
+    const { client } = fakeRedis({ xreadgroup: () => Promise.resolve(null) });
+    const s = new RedisMemWriteStream(client as never);
+
+    assert.deepEqual(await s.read("c1", 10, 0), []);
+  });
+
+  it("does not send an empty XACK", async () => {
+    const { client, cmds } = fakeRedis();
+    const s = new RedisMemWriteStream(client as never);
+
+    await s.ack([]);
+
+    assert.equal(cmds.filter((c) => c[0] === "xack").length, 0, "XACK with no ids is an error");
+  });
+
+  it("acks every id in one command", async () => {
+    const { client, cmds } = fakeRedis();
+    const s = new RedisMemWriteStream(client as never);
+
+    await s.ack(["1-1", "1-2", "1-3"]);
+
+    const xack = cmds.find((c) => c[0] === "xack");
+    assert.ok(xack);
+    assert.ok(["1-1", "1-2", "1-3"].every((id) => xack.includes(id)));
+  });
+
+  it("reports pending depth — the continuity metric, not queue trivia", async () => {
+    const { client } = fakeRedis({ xpending: () => Promise.resolve([4, "1-1", "1-4", []]) });
+    const s = new RedisMemWriteStream(client as never);
+
+    assert.equal(await s.pendingCount(), 4);
+  });
+
+  it("reports zero pending when XPENDING answers null", async () => {
+    const { client } = fakeRedis({ xpending: () => Promise.resolve(null) });
+    const s = new RedisMemWriteStream(client as never);
+
+    assert.equal(await s.pendingCount(), 0);
   });
 });

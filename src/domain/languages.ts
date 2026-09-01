@@ -57,18 +57,6 @@ export function isSpeakable(code: string | null | undefined): boolean {
   return norm !== null && SPEAKABLE_CODES.has(norm);
 }
 
-export function isHeardNotSpeakable(code: string | null | undefined): boolean {
-  const norm = normalizeLanguage(code);
-  return norm !== null && HEARD_CODES.has(norm);
-}
-
-export function languageName(code: LanguageCode): string {
-  const norm = normalizeLanguage(code);
-  const hit =
-    SPEAKABLE.find((l) => l.code === norm) ?? HEARD_NOT_SPEAKABLE.find((l) => l.code === norm);
-  return hit?.name ?? code;
-}
-
 /**
  * The core verdict. Pure: a code and an optional confidence in, a verdict out.
  *

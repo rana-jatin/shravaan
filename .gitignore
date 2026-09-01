@@ -5,5 +5,7 @@ dist/
 .DS_Store
 audio-out/
 
-# Scratch scripts that have held live credentials.
-test.py
+# Scratch scripts that have held live credentials. Kept as a pattern rather
+# than a filename: the risk is the habit, not the one file.
+*.scratch.*
+scratch/
