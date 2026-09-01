@@ -43,14 +43,10 @@ import { createCareSignalsAnalyser, type SignalsAnalyser } from "./memory/care-s
 import { SarvamLlm } from "./providers/sarvam-llm.ts";
 import { DeepgramRead } from "./providers/deepgram-read.ts";
 import { ToolRegistry } from "./tools/registry.ts";
-import {
-  BUILTIN_TOOLS,
-  NEWS_CATEGORIES,
-  createGetNews,
-  createGetWeather,
-  createRecallMood,
-  type NewsCategory,
-} from "./tools/builtin.ts";
+import { BUILTIN_TOOLS } from "./tools/builtin.ts";
+import { createGetWeather } from "./tools/weather.ts";
+import { NEWS_CATEGORIES, createGetNews, type NewsCategory } from "./tools/news.ts";
+import { createRecallMood } from "./tools/wellbeing.ts";
 import { pendingCopyReview } from "./copy/fillers.ts";
 import { GuardedSessionStore } from "./store/guarded-store.ts";
 import { HoldingAudio } from "./audio/holding-audio.ts";

@@ -38,7 +38,7 @@ import type { ReadRequest, TextAnalyser } from "../src/providers/deepgram-read.t
 import type { Config } from "../src/config/env.ts";
 import type { HttpFetch } from "../src/providers/http.ts";
 import type { Episode, MemWriteEvent } from "../src/domain/types.ts";
-import { createRecallMood } from "../src/tools/builtin.ts";
+import { createRecallMood } from "../src/tools/wellbeing.ts";
 import { fakeHost, invocation } from "./helpers.ts";
 
 // --- fixtures ----------------------------------------------------------------

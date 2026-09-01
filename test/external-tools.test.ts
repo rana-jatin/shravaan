@@ -15,12 +15,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import {
-  NEWS_CATEGORIES,
-  createGetNews,
-  createGetWeather,
-  parseFeedTitles,
-} from "../src/tools/builtin.ts";
+import { createGetWeather } from "../src/tools/weather.ts";
+import { NEWS_CATEGORIES, createGetNews, parseFeedTitles } from "../src/tools/news.ts";
 import type { HttpFetch } from "../src/providers/http.ts";
 import { ToolRegistry, toSchema, validateArgs } from "../src/tools/registry.ts";
 import type { ToolDefinition } from "../src/tools/types.ts";

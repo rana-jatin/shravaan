@@ -166,6 +166,24 @@ export type ToolInvocationContext = {
   host: SessionToolHost;
 };
 
+/**
+ * Deadline tiers. A tool picks the one that matches what it actually does.
+ *
+ * These were private to tools/builtin.ts until wellbeing.ts was split out of it
+ * and needed STORE_MS too. They live here, beside the default, so the tiers can
+ * be compared at a glance rather than rediscovered per file.
+ *
+ * The network tier is deliberately NOT here: it lives in tools/external.ts with
+ * the residency argument that governs every tool allowed to use it.
+ */
+
+/** In-process work. Anything slower than this is stuck, not busy. */
+export const INSTANT_MS = 250;
+
+/** Touches a store, which may be Redis or Postgres one day. */
+export const STORE_MS = 2500;
+
+/** What a tool gets when it does not say. Sized for a network call. */
 export const DEFAULT_DEADLINE_MS = 8000;
 export const DEFAULT_FILLER_THRESHOLD_MS = 500;
 
