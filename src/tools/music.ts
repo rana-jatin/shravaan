@@ -35,7 +35,7 @@ import type { RadioCatalogue } from "../domain/radio-catalogue.ts";
 import type { LanguageCode } from "../domain/types.ts";
 import type { ToolSpec } from "./registry.ts";
 import { getJson, nodeFetch, type HttpFetch } from "../providers/http.ts";
-import type { MediaRequest, SessionToolHost } from "./types.ts";
+import type { SessionToolHost } from "./types.ts";
 
 /** Two network hops at worst (search, then resolve). Radio is one memory read. */
 const MUSIC_MS = 6000;
