@@ -18,7 +18,7 @@ import { describe, it } from "node:test";
 import { parseCalendar, unfold } from "../src/domain/ical.ts";
 import { GoogleCalendar } from "../src/providers/google-calendar.ts";
 import { createGetAppointments, googleSource, icalSource } from "../src/tools/calendar.ts";
-import type { HttpFetch } from "../src/tools/builtin.ts";
+import type { HttpFetch } from "../src/providers/http.ts";
 import { ToolRegistry, toSchema } from "../src/tools/registry.ts";
 import { fakeHost, invocation, jsonFetch } from "./helpers.ts";
 

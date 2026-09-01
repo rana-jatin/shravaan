@@ -36,7 +36,7 @@
 
 import { SPEAKABLE } from "../domain/languages.ts";
 import type { FactKind } from "../domain/types.ts";
-import type { HttpFetch } from "../providers/http.ts";
+import { getJson, getText, nodeFetch, type HttpFetch } from "../providers/http.ts";
 import type { ToolSpec } from "./registry.ts";
 
 /** In-process work. Anything slower than this is stuck, not busy. */
@@ -423,34 +423,6 @@ const NETWORK_MS = 6000;
  */
 const NETWORK_FILLER_MS = 600;
 
-/**
- * Injectable so tests never touch a socket.
- *
- * Defined in src/providers/http.ts now that a provider needs the same shape, and
- * re-exported here because every tool in this file and in calendar.ts imports it
- * from this module.
- */
-export type { HttpFetch };
-
-async function getJson(
-  fetcher: HttpFetch,
-  url: string,
-  signal: AbortSignal,
-  what: string,
-): Promise<unknown> {
-  const res = await fetcher(url, { signal, headers: { accept: "application/json" } });
-  // A non-2xx IS infrastructure, so it throws: the executor maps it to
-  // `upstream_error` and the reviewed `tool.unavailable` copy. Contrast with the
-  // domain outcomes below, which are data.
-  if (!res.ok) throw new Error(`${what} returned HTTP ${res.status}`);
-  const body = await res.text();
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw new Error(`${what} returned unparseable JSON`);
-  }
-}
-
 // --- Weather -----------------------------------------------------------------
 
 /**
@@ -575,7 +547,7 @@ type GeocodeHit = {
 };
 
 export function createGetWeather(deps: WeatherDeps): ToolSpec {
-  const fetcher = deps.fetch ?? globalThis.fetch;
+  const fetcher = deps.fetch ?? nodeFetch();
 
   /** Old name → current name, so the geocoder can find it at all. */
   const dealias = (place: string): string => PLACE_ALIASES[place.toLowerCase()] ?? place;
@@ -590,12 +562,11 @@ export function createGetWeather(deps: WeatherDeps): ToolSpec {
   async function resolvePincode(code: string, signal: AbortSignal): Promise<string | null> {
     if (!deps.pincodeApiBase) return null;
     try {
-      const body = (await getJson(
-        fetcher,
-        `${deps.pincodeApiBase}/pincode/${encodeURIComponent(code)}`,
+      const body = await getJson<
+        Array<{ Status?: string; PostOffice?: Array<{ District?: string; State?: string }> }>
+      >(fetcher, `${deps.pincodeApiBase}/pincode/${encodeURIComponent(code)}`, "pincode lookup", {
         signal,
-        "pincode lookup",
-      )) as Array<{ Status?: string; PostOffice?: Array<{ District?: string; State?: string }> }>;
+      });
 
       const office = body?.[0]?.PostOffice?.[0];
       if (body?.[0]?.Status !== "Success" || !office?.District) return null;
@@ -614,7 +585,7 @@ export function createGetWeather(deps: WeatherDeps): ToolSpec {
     const queries = deps.countryBias ? [`${base}&countryCode=${deps.countryBias}`, base] : [base];
 
     for (const url of queries) {
-      const geo = (await getJson(fetcher, url, signal, "geocoding")) as { results?: GeocodeHit[] };
+      const geo = await getJson<{ results?: GeocodeHit[] }>(fetcher, url, "geocoding", { signal });
       const hit = geo.results?.[0];
       if (hit && typeof hit.latitude === "number" && typeof hit.longitude === "number") return hit;
     }
@@ -666,18 +637,18 @@ export function createGetWeather(deps: WeatherDeps): ToolSpec {
       // an error result would cost eleven translations. See the file header.
       if (!hit) return { found: false, reason: "unknown_place", place: asked };
 
-      const wx = (await getJson(
+      const wx = await getJson<{
+        current?: Record<string, number>;
+        daily?: Record<string, unknown[]>;
+      }>(
         fetcher,
         `${deps.apiBase}/v1/forecast?latitude=${hit.latitude}&longitude=${hit.longitude}` +
           `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m` +
           `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
           `&timezone=auto&forecast_days=1`,
-        ctx.signal,
         "forecast",
-      )) as {
-        current?: Record<string, number>;
-        daily?: Record<string, unknown[]>;
-      };
+        { signal: ctx.signal },
+      );
 
       const cur = wx.current ?? {};
       const daily = wx.daily ?? {};
@@ -782,7 +753,7 @@ export function parseFeedTitles(
 }
 
 export function createGetNews(deps: NewsDeps): ToolSpec {
-  const fetcher = deps.fetch ?? globalThis.fetch;
+  const fetcher = deps.fetch ?? nodeFetch();
   const limit = deps.limit ?? 5;
   const available = NEWS_CATEGORIES.filter((c) => deps.feeds[c]);
 
@@ -819,13 +790,12 @@ export function createGetNews(deps: NewsDeps): ToolSpec {
         return { found: 0, reason: "category_unavailable", category, available };
       }
 
-      const res = await fetcher(url, {
+      const xml = await getText(fetcher, url, "news feed", {
         signal: ctx.signal,
         headers: { accept: "application/rss+xml, application/xml, text/xml" },
       });
-      if (!res.ok) throw new Error(`news feed returned HTTP ${res.status}`);
 
-      const headlines = parseFeedTitles(await res.text(), limit);
+      const headlines = parseFeedTitles(xml, limit);
       return headlines.length === 0
         ? { found: 0, reason: "feed_empty", category }
         : { found: headlines.length, category, headlines };

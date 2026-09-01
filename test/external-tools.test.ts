@@ -20,8 +20,8 @@ import {
   createGetNews,
   createGetWeather,
   parseFeedTitles,
-  type HttpFetch,
 } from "../src/tools/builtin.ts";
+import type { HttpFetch } from "../src/providers/http.ts";
 import { ToolRegistry, toSchema, validateArgs } from "../src/tools/registry.ts";
 import type { ToolDefinition } from "../src/tools/types.ts";
 import { invocation } from "./helpers.ts";

@@ -34,7 +34,7 @@
 import type { RadioCatalogue } from "../domain/radio-catalogue.ts";
 import type { LanguageCode } from "../domain/types.ts";
 import type { ToolSpec } from "./registry.ts";
-import type { HttpFetch } from "./builtin.ts";
+import { getJson, nodeFetch, type HttpFetch } from "../providers/http.ts";
 import type { SessionToolHost } from "./types.ts";
 
 /** Two network hops at worst (search, then resolve). Radio is one memory read. */
@@ -138,7 +138,7 @@ export function pickSongLike(
 }
 
 export function createPlayMusic(deps: MusicDeps): ToolSpec {
-  const fetcher = deps.fetch ?? globalThis.fetch;
+  const fetcher = deps.fetch ?? nodeFetch();
   const apiBase = deps.youtubeApiBase ?? "https://www.googleapis.com";
   const modes: MusicMode[] = deps.youtubeApiKey ? ["radio", "song"] : ["radio"];
 
@@ -243,27 +243,23 @@ export function createPlayMusic(deps: MusicDeps): ToolSpec {
       `${apiBase}/youtube/v3/search?part=snippet&type=video&maxResults=8` +
       `&videoCategoryId=10&q=${encodeURIComponent(query)}&key=${deps.youtubeApiKey}`;
 
-    const res = await fetcher(url, { headers: { accept: "application/json" } });
     // Quota exhaustion arrives as a 403 and is the most likely failure in a
     // prototype: search costs 100 of the 10,000 free daily units, so the
-    // hundred-and-first request of the day fails. Thrown, so the executor
-    // speaks the reviewed unavailable copy rather than inventing an excuse.
-    if (!res.ok) throw new Error(`youtube search returned HTTP ${res.status}`);
-
-    const body = JSON.parse(await res.text()) as { items?: YouTubeItem[] };
+    // hundred-and-first request of the day fails. getJson throws on it, so the
+    // executor speaks the reviewed unavailable copy rather than inventing an
+    // excuse.
+    const body = await getJson<{ items?: YouTubeItem[] }>(fetcher, url, "youtube search");
     const ids = (body.items ?? []).map((i) => i.id?.videoId).filter((v): v is string => !!v);
     if (ids.length === 0) return { playing: false, reason: "no_match", query };
 
     // `videos.list` costs 1 unit against search's 100, so filtering properly is
     // effectively free next to the search that found the candidates.
-    const detailRes = await fetcher(
+    const details = await getJson<{ items?: YouTubeDetail[] }>(
+      fetcher,
       `${apiBase}/youtube/v3/videos?part=snippet,contentDetails&id=${ids.join(",")}` +
         `&key=${deps.youtubeApiKey}`,
-      { headers: { accept: "application/json" } },
+      "youtube lookup",
     );
-    if (!detailRes.ok) throw new Error(`youtube lookup returned HTTP ${detailRes.status}`);
-
-    const details = JSON.parse(await detailRes.text()) as { items?: YouTubeDetail[] };
     const pick = pickSongLike(details.items ?? []);
     // Everything found was a Short or a live stream. Saying so is better than
     // playing an 18-second clip and calling it the song they asked for.

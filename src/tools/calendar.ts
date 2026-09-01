@@ -22,7 +22,7 @@
 import { parseCalendar, type CalendarEvent } from "../domain/ical.ts";
 import type { GoogleCalendar } from "../providers/google-calendar.ts";
 import type { ToolSpec } from "./registry.ts";
-import type { HttpFetch } from "./builtin.ts";
+import { getText, nodeFetch, type HttpFetch } from "../providers/http.ts";
 
 /** A network hop, possibly several calendars. */
 const CALENDAR_MS = 6000;
@@ -56,13 +56,15 @@ export type CalendarSource = {
 
 /** A calendar reached by its public/secret iCal URL. No credential. */
 export function icalSource(label: string, url: string, fetcher?: HttpFetch): CalendarSource {
-  const f = fetcher ?? globalThis.fetch;
+  const f = fetcher ?? nodeFetch();
   return {
     label,
     async read(from, to, ctx) {
-      const res = await f(url, { signal: ctx.signal, headers: { accept: "text/calendar" } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return parseCalendar(await res.text(), from, to);
+      const ics = await getText(f, url, `calendar "${label}"`, {
+        signal: ctx.signal,
+        headers: { accept: "text/calendar" },
+      });
+      return parseCalendar(ics, from, to);
     },
   };
 }

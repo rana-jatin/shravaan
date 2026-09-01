@@ -28,6 +28,7 @@
  * substituting Hindi, and the model offers the fallback out loud.
  */
 
+import { getJson, nodeFetch, type HttpFetch } from "../providers/http.ts";
 import type { LanguageCode } from "./types.ts";
 
 /** Radio Browser's `language` field is an English name, not a BCP-47 code. */
@@ -87,14 +88,7 @@ export type RadioCatalogueDeps = {
   perLanguage?: number;
   /** Drop plain-http streams. A device fetching them is an injection surface. */
   secureOnly?: boolean;
-  fetch?: (
-    url: string,
-    init?: { signal?: AbortSignal },
-  ) => Promise<{
-    ok: boolean;
-    status: number;
-    text(): Promise<string>;
-  }>;
+  fetch?: HttpFetch;
   log?: (level: string, msg: string, extra?: Record<string, unknown>) => void;
 };
 
@@ -126,7 +120,7 @@ export class RadioCatalogue {
    * far better than silence.
    */
   async refresh(signal?: AbortSignal): Promise<void> {
-    const fetcher = this.#d.fetch ?? globalThis.fetch;
+    const fetcher = this.#d.fetch ?? nodeFetch();
 
     for (const language of this.#d.languages) {
       // A code outside the eleven has no directory name and cannot be searched.
@@ -140,9 +134,12 @@ export class RadioCatalogue {
         `&countrycode=IN&hidebroken=true&order=votes&reverse=true&limit=25`;
 
       try {
-        const res = await fetcher(url, ...(signal ? [{ signal }] : []));
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const parsed = JSON.parse(await res.text()) as RawStation[];
+        const parsed = await getJson<RawStation[]>(
+          fetcher,
+          url,
+          "radio directory",
+          signal ? { signal } : undefined,
+        );
         const stations = this.#shape(parsed, language);
 
         // An empty result REPLACES nothing. A directory hiccup that returns []
