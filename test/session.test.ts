@@ -614,3 +614,82 @@ describe("session — the seam itself", () => {
     assert.equal(calls, 0, "a fake that reaches the network is not a fake");
   });
 });
+
+describe("session — turn timing", () => {
+  /**
+   * The instrumentation is only useful if it fires on a real turn, and it fires
+   * from the TTS `audio` handler — which FakeTts does not emit on its own,
+   * because making it do so would start the echo-suppression window in every
+   * other test in this file. So the audio is emitted here explicitly, which is
+   * exactly what a real Bulbul socket does once speech has been sent.
+   */
+  async function turnWithAudio() {
+    const h = await opened();
+    h.llm.script.push(says("Main theek hoon."));
+
+    h.asr().final("Aap kaise ho?");
+    await waitFor(() => h.tts().spoken.length > 0, "a reply");
+    h.tts().emit("audio", Buffer.alloc(320));
+    await waitFor(() => h.logs.some((l) => l.msg === "turn timing"), "a timing line");
+
+    return h.logs.find((l) => l.msg === "turn timing")!;
+  }
+
+  it("reports one line per answered turn, split into the four server stages", async () => {
+    const line = await turnWithAudio();
+
+    for (const stage of ["prepare_ms", "llm_ttft_ms", "clause_ms", "tts_ttfa_ms", "gap_ms"]) {
+      assert.equal(typeof line.extra[stage], "number", `${stage} must be reported`);
+    }
+    const ms = (k: string) => {
+      const v = line.extra[k];
+      assert.equal(typeof v, "number", `${k} must be a number`);
+      return v as number;
+    };
+    assert.equal(
+      ms("prepare_ms") + ms("llm_ttft_ms") + ms("clause_ms") + ms("tts_ttfa_ms"),
+      ms("gap_ms"),
+      "the stages must account for the whole gap",
+    );
+  });
+
+  it("says the number is server-side only, so nobody reads it as end-to-end", async () => {
+    // Device capture and both network hops are ~400ms of the 945ms estimate and
+    // are invisible from here. A timing line that did not say so would be read
+    // as the user's experience.
+    const line = await turnWithAudio();
+    assert.match(String(line.extra["note"]), /server-side only/);
+  });
+
+  it("stays at info while every stage is inside its allowance", async () => {
+    const line = await turnWithAudio();
+    assert.equal(line.level, "info");
+    assert.equal(line.extra["over_budget"], undefined);
+  });
+
+  it("emits nothing for a turn that never reached audio", async () => {
+    // A gate refusal is not a slow reply, and reporting one as a turn timing
+    // would put a number on silence the user never sat through.
+    const h = await opened();
+    h.asr().final("   ");
+    await waitFor(() => true, "a tick");
+
+    assert.equal(
+      h.logs.filter((l) => l.msg === "turn timing").length,
+      0,
+      "an unanswered turn has no gap to report",
+    );
+  });
+
+  it("does not report the same turn twice, however much audio arrives", async () => {
+    const h = await opened();
+    h.llm.script.push(says("Main theek hoon."));
+    h.asr().final("Aap kaise ho?");
+    await waitFor(() => h.tts().spoken.length > 0, "a reply");
+
+    for (let i = 0; i < 5; i++) h.tts().emit("audio", Buffer.alloc(320));
+    await waitFor(() => h.logs.some((l) => l.msg === "turn timing"), "a timing line");
+
+    assert.equal(h.logs.filter((l) => l.msg === "turn timing").length, 1);
+  });
+});

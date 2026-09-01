@@ -74,6 +74,7 @@ import {
   type SessionDeps,
 } from "./session-deps.ts";
 import { buildMessages } from "./prompt.ts";
+import { TurnTimer } from "../domain/turn-timer.ts";
 import { MediaController } from "./media-controller.ts";
 
 // Re-exported so server.ts, the tests and scripts/ keep importing these from
@@ -133,6 +134,13 @@ export class Session {
   #asrReopenTimer: NodeJS.Timeout | null = null;
   /** Consecutive turns that produced no reply. Reset by any turn that works. */
   #llmFailures = 0;
+
+  /**
+   * Timing for the turn in flight. Null between turns, and null for a turn that
+   * never reaches audio — a refusal, a barge-in, a gate block. See
+   * src/domain/turn-timer.ts.
+   */
+  #timer: TurnTimer | null = null;
   /** Set once a mute-severity failure has been announced, so we say it once. */
   #terminating = false;
 
@@ -561,7 +569,13 @@ export class Session {
     tts.on("audio", (buf) => {
       // First audio of a reply starts the echo suppression window — the clock
       // begins when sound leaves for the device, not when the LLM finished.
-      if (!this.#echo.isSpeaking) this.#echo.onPlaybackStart();
+      if (!this.#echo.isSpeaking) {
+        this.#echo.onPlaybackStart();
+        // Same instant, and the reason the two are together: this is the moment
+        // the silence the user was sitting in actually ends.
+        this.#timer?.mark("first_audio");
+        this.#reportTiming();
+      }
       this.#d.device.sendAudio(buf);
     });
     tts.on("done", () => {
@@ -802,6 +816,12 @@ export class Session {
     // Answering it would talk over our own goodbye.
     if (this.#closed || this.#terminating || text.trim() === "") return;
 
+    // The clock on the silence starts here: the user has stopped talking and is
+    // now waiting. Every path below that returns early abandons this timer
+    // unreported, which is correct — a refusal is not a slow reply.
+    this.#timer = new TurnTimer(this.#d.clock?.now ?? Date.now);
+    this.#timer.mark("asr_final");
+
     // ⚠ FIRST. BEFORE EVERYTHING.
     //
     // Before the media short-circuit, before the language gate, before the
@@ -1034,8 +1054,12 @@ export class Session {
     let unanswered: ToolResult[] = [];
 
     const speak = (text: string) => {
+      // Called per content delta, so this is first-token time — mark() ignores
+      // every call after the first.
+      this.#timer?.mark("llm_first_token");
       for (const chunk of this.#chunker.push(text)) {
         if (!spokeAnything) {
+          this.#timer?.mark("first_clause");
           this.#apply({ type: "first_clause_ready" });
           spokeAnything = true;
         }
@@ -1060,6 +1084,10 @@ export class Session {
         const toolChoice: ToolChoice = round < MAX_TOOL_ROUNDS ? "auto" : "none";
 
         // Retries live inside here and stop at the first chunk — see the method.
+        // Only the FIRST round counts: a second tool round is a second request
+        // the user is waiting through, but it is not the time-to-first-token
+        // the budget is about. mark() keeps the first write.
+        this.#timer?.mark("llm_sent");
         const it = this.#llmStream(messages, offered, toolChoice, abort.signal, !spokeAnything);
 
         for (let res = await it.next(); !res.done; res = await it.next()) {
@@ -1575,6 +1603,26 @@ export class Session {
       degraded: this.#ledger.list(),
       survivability: this.#ledger.survivability.level,
       asr_provider: this.#state.asr_provider,
+    });
+  }
+
+  /**
+   * One line per answered turn, naming which stage spent the time.
+   *
+   * At INFO when everything is inside its allowance and WARN when it is not, so
+   * a slow deployment is greppable rather than something you have to already
+   * suspect. `over_budget` names the stages worst-first, which is the whole
+   * point: "it got slower" is not actionable, "llm_ttft_ms=4100ms>250ms" is.
+   */
+  #reportTiming(): void {
+    const t = this.#timer?.report();
+    this.#timer = null;
+    if (!t) return;
+    const { over_budget, ...stages } = t;
+    this.#log(over_budget.length > 0 ? "warn" : "info", "turn timing", {
+      ...stages,
+      ...(over_budget.length > 0 ? { over_budget } : {}),
+      note: "server-side only — device capture, both network hops and playback priming are not visible here (docs/03 section 3)",
     });
   }
 
