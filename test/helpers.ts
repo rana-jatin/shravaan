@@ -73,11 +73,38 @@ export function invocation(
  * test run from CI. Every value is the documented default unless a test says
  * otherwise.
  */
-export function testConfig(over: Partial<Config> = {}): Config {
+/**
+ * One level of nesting per section, so a test can override `deepgram.apiKey`
+ * without restating the other three Deepgram fields.
+ *
+ * A plain `Partial<Config>` stopped being usable when Config became nested:
+ * a shallow spread of `{ deepgram: { apiKey: null } }` REPLACES the section and
+ * silently drops wsBase, asrModel and readBase. This merges one level down,
+ * which is exactly as deep as Config goes — except mail.smtp, which gets the
+ * same treatment explicitly.
+ */
+export type ConfigOverride = {
+  [K in keyof Config]?: Config[K] extends object ? Partial<Config[K]> : Config[K];
+};
+
+export function testConfig(over: ConfigOverride = {}): Config {
   const saved = process.env;
   try {
     process.env = { SARVAM_API_KEY: "test-key-never-used-no-sockets-are-opened" };
-    return { ...loadConfig(), ...over };
+    const base = loadConfig();
+    const out: Record<string, unknown> = { ...base };
+    for (const [key, v] of Object.entries(over)) {
+      const cur = (base as Record<string, unknown>)[key];
+      const mergeable =
+        v !== null &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        cur !== null &&
+        typeof cur === "object" &&
+        !Array.isArray(cur);
+      out[key] = mergeable ? { ...cur, ...v } : v;
+    }
+    return out as Config;
   } finally {
     process.env = saved;
   }

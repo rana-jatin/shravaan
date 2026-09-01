@@ -67,17 +67,17 @@ export class DeepgramAsr extends EventEmitter<AsrEvents> implements AsrClient {
   }
 
   connect(): void {
-    if (!this.#cfg.deepgramApiKey) {
+    if (!this.#cfg.deepgram.apiKey) {
       this.emit("error", new Error("DEEPGRAM_API_KEY is unset — the standby cannot connect"));
       return;
     }
 
-    const url = new URL("/v2/listen", this.#cfg.deepgramWsBase);
-    url.searchParams.set("model", this.#cfg.deepgramModel);
+    const url = new URL("/v2/listen", this.#cfg.deepgram.wsBase);
+    url.searchParams.set("model", this.#cfg.deepgram.asrModel);
     url.searchParams.set("encoding", "linear16");
     // Flux accepts 8000/16000/24000/44100/48000, so our 16 kHz device rate passes
     // through unchanged and no resampling is needed on the failover path.
-    url.searchParams.set("sample_rate", String(this.#cfg.asrSampleRate));
+    url.searchParams.set("sample_rate", String(this.#cfg.audio.asrSampleRate));
     if (this.#opts.languageHint) url.searchParams.set("language_hint", this.#opts.languageHint);
     if (this.#opts.eotThreshold !== undefined) {
       url.searchParams.set("eot_threshold", String(this.#opts.eotThreshold));
@@ -87,7 +87,7 @@ export class DeepgramAsr extends EventEmitter<AsrEvents> implements AsrClient {
     }
 
     const ws = new WebSocket(url, {
-      headers: { Authorization: `Token ${this.#cfg.deepgramApiKey}` },
+      headers: { Authorization: `Token ${this.#cfg.deepgram.apiKey}` },
     });
     this.#ws = ws;
 

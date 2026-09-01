@@ -25,9 +25,11 @@ import { LLM_RETRY, withBackoff } from "../src/domain/backoff.ts";
 import type { Config } from "../src/config/env.ts";
 
 const CFG = {
-  apiBase: "https://sarvam.test",
-  sarvamApiKey: "test-key",
-  llmModel: "test-model",
+  sarvam: {
+    apiBase: "https://sarvam.test",
+    apiKey: "test-key",
+    llmModel: "test-model",
+  },
 } as unknown as Config;
 
 // --- SSE plumbing -----------------------------------------------------------

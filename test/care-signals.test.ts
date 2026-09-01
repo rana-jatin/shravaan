@@ -393,11 +393,13 @@ describe("care signals analyser: the refusals never reach the network", () => {
 // --- the provider ------------------------------------------------------------
 
 /** Config without touching the developer's environment. See testConfig in helpers. */
-const cfg = (over: Partial<Config> = {}): Config =>
+const cfg = (over: Partial<Config["deepgram"]> = {}): Config =>
   ({
-    deepgramApiKey: "dg-test-key",
-    deepgramReadBase: "https://api.deepgram.com",
-    ...over,
+    deepgram: {
+      apiKey: "dg-test-key",
+      readBase: "https://api.deepgram.com",
+      ...over,
+    },
   }) as unknown as Config;
 
 function recordingFetch(res: { ok?: boolean; status?: number; body?: string }) {
@@ -499,7 +501,7 @@ describe("deepgram /v1/read client", () => {
   it("refuses to call at all without a key", async () => {
     const { fetcher, seen } = recordingFetch({});
     await assert.rejects(
-      () => new DeepgramRead(cfg({ deepgramApiKey: null }), fetcher).analyse({ text: "hi" }),
+      () => new DeepgramRead(cfg({ apiKey: null }), fetcher).analyse({ text: "hi" }),
       /DEEPGRAM_API_KEY/,
     );
     assert.equal(seen.length, 0);

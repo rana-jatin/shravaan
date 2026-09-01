@@ -37,7 +37,7 @@ export function registerCalendars(tools: ToolRegistry, cfg: Config, log: Log): C
   // only where a calendar is configured, same rule as every other external tool.
   const calendarSources: CalendarSource[] = [];
 
-  for (const [label, url] of Object.entries(cfg.calendarFeeds)) {
+  for (const [label, url] of Object.entries(cfg.calendar.feeds)) {
     if (!isHttpUrl(url)) {
       log("error", "CALENDAR_FEEDS entry is not a usable http(s) URL — dropped", {
         label,
@@ -47,9 +47,9 @@ export function registerCalendars(tools: ToolRegistry, cfg: Config, log: Log): C
     }
     calendarSources.push(icalSource(label, url));
   }
-  if (cfg.calendarFeedsDropped.length > 0) {
+  if (cfg.calendar.feedsDropped.length > 0) {
     log("error", "CALENDAR_FEEDS has unreadable segments — a URL is likely truncated", {
-      dropped: cfg.calendarFeedsDropped,
+      dropped: cfg.calendar.feedsDropped,
       hint: "percent-encode a literal comma as %2C",
     });
   }
@@ -58,7 +58,7 @@ export function registerCalendars(tools: ToolRegistry, cfg: Config, log: Log): C
   // because a key cannot read a private calendar OR write at all.
   let googleCalendar: GoogleCalendar | null = null;
   try {
-    const account = parseServiceAccount(cfg.googleServiceAccountJson, (p) =>
+    const account = parseServiceAccount(cfg.calendar.googleServiceAccountJson, (p) =>
       readFileSync(p, "utf8"),
     );
     if (account) {
@@ -66,9 +66,9 @@ export function registerCalendars(tools: ToolRegistry, cfg: Config, log: Log): C
         auth: { mode: "service_account", ...account },
       });
       log("info", "google calendar: service account", { client_email: account.clientEmail });
-    } else if (cfg.googleCalendarApiKey) {
+    } else if (cfg.calendar.googleApiKey) {
       googleCalendar = new GoogleCalendar({
-        auth: { mode: "api_key", key: cfg.googleCalendarApiKey },
+        auth: { mode: "api_key", key: cfg.calendar.googleApiKey },
       });
       // Said at boot, once, in the place someone will actually look — rather
       // than left to surface as a 401 in the middle of a conversation.
@@ -84,25 +84,25 @@ export function registerCalendars(tools: ToolRegistry, cfg: Config, log: Log): C
   }
 
   if (googleCalendar) {
-    if (Object.keys(cfg.googleCalendarIds).length === 0) {
+    if (Object.keys(cfg.calendar.googleIds).length === 0) {
       log("error", "a Google credential is set but GOOGLE_CALENDAR_IDS is empty", {
         hint: "label=calendarId pairs; a personal calendar's id is its email address",
       });
     }
-    for (const [label, id] of Object.entries(cfg.googleCalendarIds)) {
+    for (const [label, id] of Object.entries(cfg.calendar.googleIds)) {
       calendarSources.push(googleSource(label, id, googleCalendar));
     }
   }
-  if (cfg.googleCalendarIdsDropped.length > 0) {
+  if (cfg.calendar.googleIdsDropped.length > 0) {
     log("error", "GOOGLE_CALENDAR_IDS has unreadable segments", {
-      dropped: cfg.googleCalendarIdsDropped,
+      dropped: cfg.calendar.googleIdsDropped,
       hint: "percent-encode a literal comma as %2C",
     });
   }
 
   if (calendarSources.length > 0) {
     tools.register(
-      createGetAppointments({ sources: calendarSources, limit: cfg.calendarEventLimit }),
+      createGetAppointments({ sources: calendarSources, limit: cfg.calendar.eventLimit }),
     );
   }
 
@@ -110,8 +110,8 @@ export function registerCalendars(tools: ToolRegistry, cfg: Config, log: Log): C
   // an explicitly named target — never a guess about which diary an appointment
   // belongs in.
   if (googleCalendar?.canWrite) {
-    const target = cfg.calendarWriteTarget;
-    const ids = cfg.googleCalendarIds;
+    const target = cfg.calendar.writeTarget;
+    const ids = cfg.calendar.googleIds;
     const only = Object.keys(ids).length === 1 ? Object.keys(ids)[0]! : null;
     const label = target ?? only;
 

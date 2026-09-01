@@ -29,7 +29,7 @@ import { formatNames, parseContacts } from "../src/tools/emergency.ts";
 import { EMERGENCY_ACK, pendingEmergencyReview } from "../src/copy/emergency-intent.ts";
 
 const cfg = loadConfig();
-const { contacts, invalid } = parseContacts(cfg.emergencyContacts);
+const { contacts, invalid } = parseContacts(cfg.emergency.contacts);
 
 function die(what: string, fix: string): never {
   console.error(`\n  ✖ ${what}\n    ${fix}\n`);
@@ -47,51 +47,51 @@ let send: MailSender;
 let transport: string;
 let sender: string;
 
-if (cfg.mailTransport === "smtp") {
-  if (!cfg.smtpHost) {
+if (cfg.mail.transport === "smtp") {
+  if (!cfg.mail.smtp.host) {
     die("SMTP_HOST is not set", "Or set MAIL_TRANSPORT=sendgrid to use the Web API instead.");
   }
-  if (!cfg.smtpFrom) {
+  if (!cfg.mail.smtp.from) {
     die("SMTP_FROM and SMTP_USER are both unset", "Set SMTP_USER to the sending address.");
   }
-  if (!cfg.smtpPass) {
+  if (!cfg.mail.smtp.pass) {
     die("SMTP_PASS is not set", "Gmail: https://myaccount.google.com/apppasswords");
   }
-  if (/\s/.test(cfg.smtpPass)) {
+  if (/\s/.test(cfg.mail.smtp.pass)) {
     // App passwords are displayed in four groups of four. Pasting them with the
     // spaces still in is the single most common cause of a 535.
     console.error("  ! SMTP_PASS contains a space — app passwords are shown in groups");
     console.error("    of four but must be entered with NO spaces.\n");
   }
-  transport = `smtp ${cfg.smtpHost}:${cfg.smtpPort} (${cfg.smtpSecurity})`;
-  sender = cfg.smtpFrom;
+  transport = `smtp ${cfg.mail.smtp.host}:${cfg.mail.smtp.port} (${cfg.mail.smtp.security})`;
+  sender = cfg.mail.smtp.from;
   send = createSmtpSender({
-    host: cfg.smtpHost,
-    port: cfg.smtpPort,
-    security: cfg.smtpSecurity,
-    user: cfg.smtpUser,
-    pass: cfg.smtpPass,
-    from: cfg.smtpFrom,
+    host: cfg.mail.smtp.host,
+    port: cfg.mail.smtp.port,
+    security: cfg.mail.smtp.security,
+    user: cfg.mail.smtp.user,
+    pass: cfg.mail.smtp.pass,
+    from: cfg.mail.smtp.from,
   });
 } else {
-  if (!cfg.mailApiKey) {
+  if (!cfg.mail.apiKey) {
     die(
-      `MAIL_TRANSPORT=${cfg.mailTransport} but no API key is set`,
+      `MAIL_TRANSPORT=${cfg.mail.transport} but no API key is set`,
       "Set MAIL_API_KEY (SENDGRID_API_KEY is accepted too). SendGrid: Settings > API Keys > Create, with Mail Send permission.",
     );
   }
-  if (!cfg.mailFrom) {
+  if (!cfg.mail.from) {
     die(
       "MAIL_FROM is not set",
       "It must be an address VERIFIED with the provider. SendGrid: Settings > Sender Authentication > Single Sender Verification.",
     );
   }
-  transport = `${cfg.mailTransport} web api`;
-  sender = cfg.mailFrom;
+  transport = `${cfg.mail.transport} web api`;
+  sender = cfg.mail.from;
   send = createHttpMailSender({
-    provider: cfg.mailTransport,
-    apiKey: cfg.mailApiKey,
-    from: cfg.mailFrom,
+    provider: cfg.mail.transport,
+    apiKey: cfg.mail.apiKey,
+    from: cfg.mail.from,
   });
 }
 
@@ -140,7 +140,7 @@ try {
   console.error(`\n  ✖ FAILED after ${Date.now() - started} ms\n    ${message}\n`);
 
   const explained =
-    cfg.mailTransport === "smtp" ? null : explainMailApiError(cfg.mailTransport, message);
+    cfg.mail.transport === "smtp" ? null : explainMailApiError(cfg.mail.transport, message);
 
   if (explained) {
     console.error(`    ${explained}\n`);

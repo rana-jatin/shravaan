@@ -91,15 +91,15 @@ export function start(): ServerHandle {
     count: tools.all().length,
     names: tools.all().map((t) => t.name),
     external: {
-      music: cfg.musicEnabled ? (cfg.youtubeApiKey ? "radio+song" : "radio only") : false,
+      music: cfg.music.enabled ? (cfg.music.youtubeApiKey ? "radio+song" : "radio only") : false,
       calendars: calendars.sources,
       calendar_writable: calendars.writable,
       emergency: alerter ? alertContacts : false,
-      weather: cfg.weatherEnabled,
+      weather: cfg.weather.enabled,
       news: newsCategories,
       // Worth saying out loud at boot: this is the one hop that is not Sarvam
       // and not in India. See the residency note in src/config/env.ts.
-      residency: cfg.weatherEnabled ? "get_weather leaves India (Open-Meteo, EU)" : "all in-India",
+      residency: cfg.weather.enabled ? "get_weather leaves India (Open-Meteo, EU)" : "all in-India",
     },
     note: "sarvam-105b tool-calling verified 2026-08-29 — npm run verify:tools",
   });
@@ -108,20 +108,20 @@ export function start(): ServerHandle {
   // that cannot be synthesised, because synthesis is what broke.
   const holdingAudio = new HoldingAudio({
     dir: cfg.holdingAudioDir,
-    expectedSampleRate: cfg.ttsSampleRate,
+    expectedSampleRate: cfg.audio.ttsSampleRate,
     log,
   });
   holdingAudio.load();
 
   // State the availability profile at boot rather than during an incident.
   const redundancy = redundancyProfile(SPEAKABLE.map((l) => l.code));
-  log(cfg.asrFailoverEnabled ? "info" : "warn", "asr failover", {
-    enabled: cfg.asrFailoverEnabled,
-    key_present: cfg.deepgramApiKey !== null,
+  log(cfg.asrFailover.enabled ? "info" : "warn", "asr failover", {
+    enabled: cfg.asrFailover.enabled,
+    key_present: cfg.deepgram.apiKey !== null,
     redundant_languages: redundancy.redundant,
     single_vendor_languages: redundancy.singleVendor.length,
     tts_failover: "none, for any language — docs/adr/0005-tts-provider-split.md",
-    residency: cfg.asrFailoverEnabled
+    residency: cfg.asrFailover.enabled
       ? "ENABLED: a failover sends audio to Deepgram, which publishes no India region"
       : "disabled by default; enabling relocates audio out of India (docs/05 Q14)",
   });
@@ -130,8 +130,8 @@ export function start(): ServerHandle {
   log("info", "listening", {
     port: cfg.port,
     speakable: SPEAKABLE.length,
-    asrRate: cfg.asrSampleRate,
-    ttsRate: cfg.ttsSampleRate,
+    asrRate: cfg.audio.asrSampleRate,
+    ttsRate: cfg.audio.ttsSampleRate,
     store: cfg.redisUrl ? "redis" : "memory",
   });
 

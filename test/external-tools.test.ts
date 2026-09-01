@@ -512,8 +512,7 @@ describe("get_weather — resolving which place was meant", () => {
 describe("NEWS_FEEDS parsing", () => {
   /** Load the config fresh with one NEWS_FEEDS value, hermetically. */
   async function load(raw: string): Promise<{
-    newsFeeds: Record<string, string>;
-    newsFeedsDropped: string[];
+    news: { feeds: Record<string, string>; feedsDropped: string[] };
   }> {
     const saved = process.env;
     try {
@@ -521,7 +520,7 @@ describe("NEWS_FEEDS parsing", () => {
       const mod = await import(`../src/config/env.ts?feeds=${encodeURIComponent(raw)}`);
       return (
         mod as {
-          loadConfig: () => { newsFeeds: Record<string, string>; newsFeedsDropped: string[] };
+          loadConfig: () => { news: { feeds: Record<string, string>; feedsDropped: string[] } };
         }
       ).loadConfig();
     } finally {
@@ -529,7 +528,7 @@ describe("NEWS_FEEDS parsing", () => {
     }
   }
 
-  const parse = async (raw: string) => (await load(raw)).newsFeeds;
+  const parse = async (raw: string) => (await load(raw)).news.feeds;
 
   it("keeps an ampersand — Google News URLs survive intact", async () => {
     const out = await parse("top=https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en");
@@ -559,12 +558,12 @@ describe("NEWS_FEEDS parsing", () => {
     // valid URL, so no amount of URL checking catches this — the orphans are
     // what server.ts warns on.
     const cfg = await load("top=https://x.test/rss?ids=1,2,3,sports=https://y.test/s.rss");
-    assert.deepEqual(cfg.newsFeedsDropped, ["2", "3"]);
+    assert.deepEqual(cfg.news.feedsDropped, ["2", "3"]);
   });
 
   it("reports nothing dropped for a clean config", async () => {
     const cfg = await load("top=https://x.test/rss?a=1&b=2,sports=https://y.test/s.rss");
-    assert.deepEqual(cfg.newsFeedsDropped, []);
+    assert.deepEqual(cfg.news.feedsDropped, []);
   });
 
   it("survives a percent-encoded comma, which is the documented workaround", async () => {

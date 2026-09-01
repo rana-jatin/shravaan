@@ -107,11 +107,11 @@ export class DeepgramRead implements TextAnalyser {
    * the shape changes under you.
    */
   async analyse(req: ReadRequest): Promise<unknown> {
-    if (!this.#cfg.deepgramApiKey) {
+    if (!this.#cfg.deepgram.apiKey) {
       throw new DeepgramReadError(0, "DEEPGRAM_API_KEY is unset");
     }
 
-    const url = new URL("/v1/read", this.#cfg.deepgramReadBase);
+    const url = new URL("/v1/read", this.#cfg.deepgram.readBase);
     // Required, and only ever this value. See the header note.
     url.searchParams.set("language", "en");
     if (req.sentiment) url.searchParams.set("sentiment", "true");
@@ -126,7 +126,7 @@ export class DeepgramRead implements TextAnalyser {
     const init: Parameters<HttpFetch>[1] = {
       method: "POST",
       headers: {
-        Authorization: `Token ${this.#cfg.deepgramApiKey}`,
+        Authorization: `Token ${this.#cfg.deepgram.apiKey}`,
         "Content-Type": "application/json",
         accept: "application/json",
       },

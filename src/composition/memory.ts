@@ -74,16 +74,16 @@ export function buildMemory(cfg: Config, log: Log): MemoryStack {
   // this, on any turn. Off unless the deployment turned it on — see the config
   // block in src/config/env.ts for the three reasons why that is the default.
   let signals: SignalsAnalyser | null = null;
-  if (cfg.careSignalsEnabled) {
+  if (cfg.careSignals.enabled) {
     signals = createCareSignalsAnalyser(new DeepgramRead(cfg), {
-      deadlineMs: cfg.careSignalsDeadlineMs,
-      intentConfidence: cfg.careSignalsIntentConfidence,
+      deadlineMs: cfg.careSignals.deadlineMs,
+      intentConfidence: cfg.careSignals.intentConfidence,
       log,
     });
     log("warn", "care signals ON — English sessions are sent to Deepgram after close", {
-      endpoint: `${cfg.deepgramReadBase}/v1/read`,
+      endpoint: `${cfg.deepgram.readBase}/v1/read`,
       note: "transcripts leave India; ten of eleven languages are never analysed",
-      intent_confidence_floor: cfg.careSignalsIntentConfidence,
+      intent_confidence_floor: cfg.careSignals.intentConfidence,
       unverified: "field names reconstructed from docs — run npm run verify:care",
     });
   }

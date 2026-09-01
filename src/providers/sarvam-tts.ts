@@ -89,11 +89,11 @@ export class SarvamTts extends EventEmitter<TtsEvents> implements TtsClient {
 
   connect(): void {
     this.#intentionallyClosed = false;
-    const url = new URL("/text-to-speech/ws", this.#cfg.wsBase);
-    url.searchParams.set("model", this.#cfg.ttsModel);
+    const url = new URL("/text-to-speech/ws", this.#cfg.sarvam.wsBase);
+    url.searchParams.set("model", this.#cfg.sarvam.ttsModel);
 
     const ws = new WebSocket(url, {
-      headers: { "api-subscription-key": this.#cfg.sarvamApiKey },
+      headers: { "api-subscription-key": this.#cfg.sarvam.apiKey },
     });
     this.#ws = ws;
 
@@ -161,10 +161,10 @@ export class SarvamTts extends EventEmitter<TtsEvents> implements TtsClient {
       data: {
         speaker: this.#opts.speaker,
         target_language_code: this.#opts.languageCode,
-        pace: this.#opts.pace ?? this.#cfg.ttsPace,
+        pace: this.#opts.pace ?? this.#cfg.audio.ttsPace,
         output_audio_codec: "linear16",
         // Bulbul streaming is capped at 24 kHz; env validation enforces this.
-        sample_rate: this.#cfg.ttsSampleRate,
+        sample_rate: this.#cfg.audio.ttsSampleRate,
         send_completion_event: true,
       },
     });

@@ -46,7 +46,7 @@ function show(label: string, value: unknown): void {
 }
 
 async function main(): Promise<void> {
-  if (!cfg.deepgramApiKey) {
+  if (!cfg.deepgram.apiKey) {
     console.error("DEEPGRAM_API_KEY is unset. Nothing to verify.");
     process.exitCode = 1;
     return;
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
   // ── 0 ─────────────────────────────────────────────────────────────────────
   console.log(`\n-- 0  is the key valid? (REST, before we spend any audio)`);
   const auth = await fetch("https://api.deepgram.com/v1/auth/token", {
-    headers: { Authorization: `Token ${cfg.deepgramApiKey}` },
+    headers: { Authorization: `Token ${cfg.deepgram.apiKey}` },
   });
   if (!auth.ok) {
     console.log(`   ✖ HTTP ${auth.status} — ${(await auth.text()).slice(0, 200)}`);
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
   try {
     pcm = await readFile(CLIP);
     const manifest = JSON.parse(await readFile(MANIFEST, "utf8")) as { sample_rate?: number };
-    rate = manifest.sample_rate ?? cfg.asrSampleRate;
+    rate = manifest.sample_rate ?? cfg.audio.asrSampleRate;
   } catch {
     console.log(`\n   ✖ ${CLIP} is missing. Run \`npm run render:holding\` first —`);
     console.log("     probes 1–3 need real speech and this repo has no other.");
@@ -85,7 +85,7 @@ async function main(): Promise<void> {
   // rate, not the ASR one, and Flux accepts both — so we hand it the clip's rate
   // rather than resampling and testing audio we do not actually send in anger.
   const asr = new DeepgramAsr(
-    { ...cfg, asrSampleRate: rate },
+    { ...cfg, audio: { ...cfg.audio, asrSampleRate: rate } },
     {
       languageHint: LANG.split("-")[0]!,
     },
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
 
   // ── 1 ─────────────────────────────────────────────────────────────────────
   console.log(
-    `\n-- 1  does the Flux socket open? (${cfg.deepgramWsBase}/v2/listen, ${cfg.deepgramModel})`,
+    `\n-- 1  does the Flux socket open? (${cfg.deepgram.wsBase}/v2/listen, ${cfg.deepgram.asrModel})`,
   );
   asr.connect();
   const deadline = Date.now() + OPEN_TIMEOUT_MS;

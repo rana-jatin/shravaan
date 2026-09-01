@@ -75,12 +75,12 @@ async function probe(n: number, question: string, fn: () => Promise<void>): Prom
 }
 
 async function main(): Promise<void> {
-  if (!cfg.deepgramApiKey) {
+  if (!cfg.deepgram.apiKey) {
     console.error("DEEPGRAM_API_KEY is unset. Nothing to verify.");
     process.exitCode = 1;
     return;
   }
-  console.log(`Deepgram /v1/read at ${cfg.deepgramReadBase}`);
+  console.log(`Deepgram /v1/read at ${cfg.deepgram.readBase}`);
 
   await probe(1, "endpoint and auth", async () => {
     const body = await read.analyse({ text: SAMPLE, sentiment: true });

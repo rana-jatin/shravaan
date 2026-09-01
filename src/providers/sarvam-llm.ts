@@ -60,16 +60,16 @@ export class SarvamLlm implements LlmClient {
    * latency win available to us.
    */
   async *stream(messages: ChatMessage[], opts: StreamOptions = {}): AsyncGenerator<StreamChunk> {
-    const url = new URL("/v1/chat/completions", this.#cfg.apiBase);
+    const url = new URL("/v1/chat/completions", this.#cfg.sarvam.apiBase);
 
     const res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "api-subscription-key": this.#cfg.sarvamApiKey,
+        "api-subscription-key": this.#cfg.sarvam.apiKey,
       },
       body: JSON.stringify({
-        model: this.#cfg.llmModel,
+        model: this.#cfg.sarvam.llmModel,
         messages,
         stream: true,
         ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
@@ -116,7 +116,7 @@ export class SarvamLlm implements LlmClient {
       onStrayClose: () =>
         opts.onWarn?.("model reasoning reached the speech path", {
           detail: "a bare </think> arrived in `content`; text before it has already been spoken",
-          model: this.#cfg.llmModel,
+          model: this.#cfg.sarvam.llmModel,
         }),
     });
 
@@ -178,7 +178,7 @@ export class SarvamLlm implements LlmClient {
             if (!warnedReasoning) {
               warnedReasoning = true;
               opts.onWarn?.("model is emitting reasoning tokens", {
-                model: this.#cfg.llmModel,
+                model: this.#cfg.sarvam.llmModel,
                 detail:
                   "reasoning_content delays the first spoken token; " +
                   "sarvam-105b measured ~12.8s vs ~0.3s on sarvam-105b-conversations",

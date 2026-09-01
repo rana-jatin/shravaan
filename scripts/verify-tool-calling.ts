@@ -85,14 +85,14 @@ const GET_WEATHER = {
 };
 
 async function probe(body: Record<string, unknown>): Promise<Probe> {
-  const url = new URL("/v1/chat/completions", cfg.apiBase);
+  const url = new URL("/v1/chat/completions", cfg.sarvam.apiBase);
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "api-subscription-key": cfg.sarvamApiKey,
+      "api-subscription-key": cfg.sarvam.apiKey,
     },
-    body: JSON.stringify({ model: cfg.llmModel, stream: true, ...body }),
+    body: JSON.stringify({ model: cfg.sarvam.llmModel, stream: true, ...body }),
   });
 
   const out: Probe = {
@@ -185,7 +185,7 @@ function report(label: string, p: Probe, notes: string[] = []): void {
 }
 
 async function main(): Promise<void> {
-  console.log(`model=${cfg.llmModel}  base=${cfg.apiBase}`);
+  console.log(`model=${cfg.sarvam.llmModel}  base=${cfg.sarvam.apiBase}`);
   console.log("Probing sarvam-105b tool-calling. ADR 0003's open question.");
 
   // 1 — are tools accepted, and does a call come back?

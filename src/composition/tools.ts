@@ -41,20 +41,20 @@ export function registerTools(cfg: Config, log: Log): ToolWiring {
 
   // Registered only where the worker is actually writing signals. Otherwise the
   // model would carry a tool whose only possible answer is "nothing recorded".
-  if (cfg.careSignalsEnabled) tools.register(createRecallMood());
+  if (cfg.careSignals.enabled) tools.register(createRecallMood());
 
   // The external tools, registered ONLY where the deployment configured one.
   // Unconfigured means unregistered means never described to the user — an agent
   // that offers the weather and then cannot fetch it is worse than one that never
   // mentioned it (src/tools/registry.ts, `offerableTo`).
-  if (cfg.weatherEnabled) {
+  if (cfg.weather.enabled) {
     tools.register(
       createGetWeather({
-        apiBase: cfg.weatherApiBase,
-        geocodeBase: cfg.weatherGeocodeBase,
-        defaultPlace: cfg.weatherDefaultPlace,
-        countryBias: cfg.weatherCountryBias,
-        pincodeApiBase: cfg.weatherPincodeApiBase,
+        apiBase: cfg.weather.apiBase,
+        geocodeBase: cfg.weather.geocodeBase,
+        defaultPlace: cfg.weather.defaultPlace,
+        countryBias: cfg.weather.countryBias,
+        pincodeApiBase: cfg.weather.pincodeApiBase,
       }),
     );
   }
@@ -64,7 +64,7 @@ export function registerTools(cfg: Config, log: Log): ToolWiring {
   // it would then pick and get nothing from.
   const newsFeeds: Partial<Record<NewsCategory, string>> = {};
   for (const category of NEWS_CATEGORIES) {
-    const url = cfg.newsFeeds[category];
+    const url = cfg.news.feeds[category];
     if (!url) continue;
 
     // Refuse anything that is not http(s) — a missing scheme, or a file:/data:
@@ -83,14 +83,14 @@ export function registerTools(cfg: Config, log: Log): ToolWiring {
   // surviving half still parses as a URL and passes every check above, so this
   // warning is the ONLY evidence the operator gets before the feed 404s in
   // front of a user. See parsePairs in src/config/env.ts.
-  if (cfg.newsFeedsDropped.length > 0) {
+  if (cfg.news.feedsDropped.length > 0) {
     log("error", "NEWS_FEEDS has unreadable segments — a feed URL is likely truncated", {
-      dropped: cfg.newsFeedsDropped,
+      dropped: cfg.news.feedsDropped,
       hint: "percent-encode a literal comma in a feed URL as %2C",
       parsed: newsFeeds,
     });
   }
-  const unknownFeeds = Object.keys(cfg.newsFeeds).filter(
+  const unknownFeeds = Object.keys(cfg.news.feeds).filter(
     (k) => !(NEWS_CATEGORIES as readonly string[]).includes(k),
   );
   if (unknownFeeds.length > 0) {
@@ -100,19 +100,19 @@ export function registerTools(cfg: Config, log: Log): ToolWiring {
     });
   }
   if (Object.keys(newsFeeds).length > 0) {
-    tools.register(createGetNews({ feeds: newsFeeds, limit: cfg.newsHeadlineLimit }));
+    tools.register(createGetNews({ feeds: newsFeeds, limit: cfg.news.headlineLimit }));
   }
 
   // Music. The catalogue is filled ONCE at boot and then on a timer — never in a
   // turn, where a 4.4 s directory query would blow every deadline in the system.
   let radio: RadioCatalogue | null = null;
-  if (cfg.musicEnabled) {
+  if (cfg.music.enabled) {
     radio = new RadioCatalogue({
-      apiBase: cfg.musicRadioApi,
+      apiBase: cfg.music.radioApi,
       languages: SPEAKABLE.map((l) => l.code),
-      fallbackLanguage: cfg.musicFallbackLanguage,
-      perLanguage: cfg.musicStationsPerLanguage,
-      secureOnly: cfg.musicSecureOnly,
+      fallbackLanguage: cfg.music.fallbackLanguage,
+      perLanguage: cfg.music.stationsPerLanguage,
+      secureOnly: cfg.music.secureOnly,
       log,
     });
 
@@ -125,7 +125,7 @@ export function registerTools(cfg: Config, log: Log): ToolWiring {
       });
     });
 
-    const everyMs = Math.max(1, cfg.musicRefreshMinutes) * 60_000;
+    const everyMs = Math.max(1, cfg.music.refreshMinutes) * 60_000;
     setInterval(() => {
       void radio!.refresh().catch(() => {});
     }, everyMs).unref?.();
@@ -143,8 +143,8 @@ export function registerTools(cfg: Config, log: Log): ToolWiring {
     tools.register(
       createPlayMusic({
         catalogue: radio,
-        youtubeApiKey: cfg.youtubeApiKey,
-        youtubeApiBase: cfg.youtubeApiBase,
+        youtubeApiKey: cfg.music.youtubeApiKey,
+        youtubeApiBase: cfg.music.youtubeApiBase,
       }),
     );
   }

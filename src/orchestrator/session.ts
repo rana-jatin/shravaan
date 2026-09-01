@@ -145,10 +145,10 @@ export class Session {
     this.#echo = new EchoGuard(deps.cfg.echoGuard);
     this.#store = deps.store ?? new NullSessionStore();
     this.#tools = deps.tools ?? null;
-    this.#pace = deps.cfg.ttsPace;
+    this.#pace = deps.cfg.audio.ttsPace;
     this.#media = new MediaController({
       sendControl: (msg) => deps.device.sendControl(msg),
-      defaultVolume: deps.cfg.musicVolume,
+      defaultVolume: deps.cfg.music.volume,
       log: (level, msg, extra) => this.#log(level, msg, extra),
     });
     this.#executor = this.#tools
@@ -516,7 +516,7 @@ export class Session {
             // over the seed. The token itself is unresolved in Sarvam's docs
             // (docs/05 Q1).
             opts: {
-              languageCode: this.#d.cfg.asrAutodetectToken,
+              languageCode: this.#d.cfg.sarvam.asrAutodetectToken,
               mode: "codemix",
               returnTimestamps: true,
             },
@@ -555,8 +555,8 @@ export class Session {
   #openTts(language: LanguageCode): void {
     const tts = (this.#d.makeTts ?? createTts)(this.#d.cfg, {
       languageCode: language,
-      speaker: this.#d.cfg.ttsSpeaker,
-      pace: this.#d.cfg.ttsPace,
+      speaker: this.#d.cfg.audio.ttsSpeaker,
+      pace: this.#d.cfg.audio.ttsPace,
     });
     tts.on("audio", (buf) => {
       // First audio of a reply starts the echo suppression window — the clock
@@ -621,7 +621,7 @@ export class Session {
     this.#asr = null;
 
     const standby = standbyFor(this.#state.language, {
-      configured: this.#d.cfg.asrFailoverEnabled && this.#d.cfg.deepgramApiKey !== null,
+      configured: this.#d.cfg.asrFailover.enabled && this.#d.cfg.deepgram.apiKey !== null,
       current: this.#state.asr_provider,
     });
 
@@ -851,7 +851,7 @@ export class Session {
         return;
       }
     }
-    if (this.#media.playing && this.#d.cfg.restrictListeningDuringMedia) {
+    if (this.#media.playing && this.#d.cfg.music.restrictListening) {
       this.#log("info", "ignored while media playing", { text: text.slice(0, 60) });
       return;
     }

@@ -55,17 +55,17 @@ export class SarvamAsr extends EventEmitter<AsrEvents> implements AsrClient {
   }
 
   connect(): void {
-    const url = new URL("/speech-to-text-realtime/ws", this.#cfg.wsBase);
-    url.searchParams.set("model", this.#cfg.asrModel);
+    const url = new URL("/speech-to-text-realtime/ws", this.#cfg.sarvam.wsBase);
+    url.searchParams.set("model", this.#cfg.sarvam.asrModel);
     url.searchParams.set("language_code", this.#opts.languageCode);
     url.searchParams.set("encoding", "linear16");
-    url.searchParams.set("sample_rate", String(this.#cfg.asrSampleRate));
+    url.searchParams.set("sample_rate", String(this.#cfg.audio.asrSampleRate));
     if (this.#opts.mode) url.searchParams.set("mode", this.#opts.mode);
     if (this.#opts.returnTimestamps) url.searchParams.set("return_timestamps", "true");
 
     const ws = new WebSocket(url, {
       // ⚠ Header name unverified — see file header.
-      headers: { "api-subscription-key": this.#cfg.sarvamApiKey },
+      headers: { "api-subscription-key": this.#cfg.sarvam.apiKey },
     });
     this.#ws = ws;
 
@@ -90,7 +90,7 @@ export class SarvamAsr extends EventEmitter<AsrEvents> implements AsrClient {
           new Error(
             `Sarvam closed the ASR socket with code 4000` +
               (detail ? `: ${detail}` : ` and an empty reason`) +
-              ` — sent sample_rate=${this.#cfg.asrSampleRate}, model=${this.#cfg.asrModel}, ` +
+              ` — sent sample_rate=${this.#cfg.audio.asrSampleRate}, model=${this.#cfg.sarvam.asrModel}, ` +
               `language_code=${this.#opts.languageCode}, path=${url.pathname}`,
           ),
         );

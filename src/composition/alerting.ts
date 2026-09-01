@@ -28,7 +28,7 @@ export function registerAlerting(tools: ToolRegistry, cfg: Config, log: Log): Al
   // Emergency contacts. Registered only when there is somewhere to send an
   // alert AND a relay to send it through — see below for why half-configured is
   // treated as not configured.
-  const { contacts, invalid } = parseContacts(cfg.emergencyContacts);
+  const { contacts, invalid } = parseContacts(cfg.emergency.contacts);
   if (invalid.length > 0) {
     log("error", "EMERGENCY_CONTACTS has entries that are not email addresses — dropped", {
       dropped: invalid,
@@ -39,25 +39,25 @@ export function registerAlerting(tools: ToolRegistry, cfg: Config, log: Log): Al
   // one is preferred on this particular path.
   let mailSender: MailSender | null = null;
   let transportLabel = "";
-  if (cfg.mailTransport === "smtp") {
-    if (cfg.smtpHost && cfg.smtpFrom) {
+  if (cfg.mail.transport === "smtp") {
+    if (cfg.mail.smtp.host && cfg.mail.smtp.from) {
       mailSender = createSmtpSender({
-        host: cfg.smtpHost,
-        port: cfg.smtpPort,
-        security: cfg.smtpSecurity,
-        user: cfg.smtpUser,
-        pass: cfg.smtpPass,
-        from: cfg.smtpFrom,
+        host: cfg.mail.smtp.host,
+        port: cfg.mail.smtp.port,
+        security: cfg.mail.smtp.security,
+        user: cfg.mail.smtp.user,
+        pass: cfg.mail.smtp.pass,
+        from: cfg.mail.smtp.from,
       });
-      transportLabel = `smtp ${cfg.smtpHost}:${cfg.smtpPort} (${cfg.smtpSecurity})`;
+      transportLabel = `smtp ${cfg.mail.smtp.host}:${cfg.mail.smtp.port} (${cfg.mail.smtp.security})`;
     }
-  } else if (cfg.mailApiKey && cfg.mailFrom) {
+  } else if (cfg.mail.apiKey && cfg.mail.from) {
     mailSender = createHttpMailSender({
-      provider: cfg.mailTransport,
-      apiKey: cfg.mailApiKey,
-      from: cfg.mailFrom,
+      provider: cfg.mail.transport,
+      apiKey: cfg.mail.apiKey,
+      from: cfg.mail.from,
     });
-    transportLabel = `${cfg.mailTransport} web api, from ${cfg.mailFrom}`;
+    transportLabel = `${cfg.mail.transport} web api, from ${cfg.mail.from}`;
   }
 
   let alerter: EmergencyAlerter | null = null;
@@ -65,7 +65,7 @@ export function registerAlerting(tools: ToolRegistry, cfg: Config, log: Log): Al
     alerter = new EmergencyAlerter({
       send: mailSender,
       contacts,
-      cooldownMs: cfg.emergencyCooldownMs,
+      cooldownMs: cfg.emergency.cooldownMs,
       log,
     });
     tools.register(createRaiseAlarm(alerter));
@@ -80,22 +80,22 @@ export function registerAlerting(tools: ToolRegistry, cfg: Config, log: Log): Al
       unreviewed_languages: unreviewed,
       note: "en-IN and hi-IN phrases reviewed; the rest need a native speaker",
     });
-  } else if (contacts.length > 0 || cfg.smtpHost || cfg.mailApiKey) {
+  } else if (contacts.length > 0 || cfg.mail.smtp.host || cfg.mail.apiKey) {
     // HALF-CONFIGURED IS THE DANGEROUS STATE, so it is refused rather than
     // half-enabled. Contacts with no relay would recognise "help" and have no
     // way to send it; a relay with no contacts has nowhere to send it. Either
     // way the companion would say help is coming when nothing is.
     log("error", "EMERGENCY ALERTING IS OFF — configured only halfway", {
       contacts: contacts.length,
-      transport: cfg.mailTransport,
-      ...(cfg.mailTransport === "smtp"
+      transport: cfg.mail.transport,
+      ...(cfg.mail.transport === "smtp"
         ? {
-            smtp_host: cfg.smtpHost ? "set" : "MISSING",
-            smtp_from: cfg.smtpFrom ? "set" : "MISSING",
+            smtp_host: cfg.mail.smtp.host ? "set" : "MISSING",
+            smtp_from: cfg.mail.smtp.from ? "set" : "MISSING",
           }
         : {
-            mail_api_key: cfg.mailApiKey ? "set" : "MISSING",
-            mail_from: cfg.mailFrom ? "set" : "MISSING",
+            mail_api_key: cfg.mail.apiKey ? "set" : "MISSING",
+            mail_from: cfg.mail.from ? "set" : "MISSING",
           }),
       effect: "a call for help will be treated as an ordinary turn",
     });

@@ -34,19 +34,19 @@ import { REQUIRED_CLIPS } from "../src/audio/holding-audio.ts";
 const cfg = loadConfig();
 
 async function renderOne(text: string, language: string): Promise<Buffer> {
-  const res = await fetch(new URL("/text-to-speech", cfg.apiBase), {
+  const res = await fetch(new URL("/text-to-speech", cfg.sarvam.apiBase), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "api-subscription-key": cfg.sarvamApiKey,
+      "api-subscription-key": cfg.sarvam.apiKey,
     },
     body: JSON.stringify({
       text,
       target_language_code: language,
-      speaker: cfg.ttsSpeaker,
-      model: cfg.ttsModel,
-      pace: cfg.ttsPace,
-      speech_sample_rate: cfg.ttsSampleRate,
+      speaker: cfg.audio.ttsSpeaker,
+      model: cfg.sarvam.ttsModel,
+      pace: cfg.audio.ttsPace,
+      speech_sample_rate: cfg.audio.ttsSampleRate,
     }),
   });
 
@@ -117,9 +117,9 @@ async function main(): Promise<void> {
     join(dir, "manifest.json"),
     `${JSON.stringify(
       {
-        sample_rate: cfg.ttsSampleRate,
+        sample_rate: cfg.audio.ttsSampleRate,
         encoding: "linear16",
-        speaker: cfg.ttsSpeaker,
+        speaker: cfg.audio.ttsSpeaker,
         rendered_at: new Date().toISOString(),
       },
       null,

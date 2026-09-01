@@ -134,8 +134,7 @@ describe("deepgram flux frame parsing", () => {
   async function connect(): Promise<Capture> {
     armNextSocket();
     const cfg = testConfig({
-      deepgramApiKey: "test-key",
-      deepgramWsBase: `ws://127.0.0.1:${PORT}`,
+      deepgram: { apiKey: "test-key", wsBase: `ws://127.0.0.1:${PORT}` },
     });
     const asr = new DeepgramAsr(cfg, { languageHint: "en" });
     const cap: Capture = {
@@ -267,8 +266,7 @@ describe("deepgram flux frame parsing", () => {
   it("sends the auth header, model and rate Flux needs to answer at all", async () => {
     armNextSocket();
     const cfg = testConfig({
-      deepgramApiKey: "test-key",
-      deepgramWsBase: `ws://127.0.0.1:${PORT}`,
+      deepgram: { apiKey: "test-key", wsBase: `ws://127.0.0.1:${PORT}` },
     });
     const asr = new DeepgramAsr(cfg, { languageHint: "hi" });
     asr.connect();
@@ -277,9 +275,9 @@ describe("deepgram flux frame parsing", () => {
     const url = new URL(req.url!, "ws://x");
 
     assert.equal(req.headers["authorization"], "Token test-key");
-    assert.equal(url.searchParams.get("model"), cfg.deepgramModel);
+    assert.equal(url.searchParams.get("model"), cfg.deepgram.asrModel);
     assert.equal(url.searchParams.get("encoding"), "linear16");
-    assert.equal(url.searchParams.get("sample_rate"), String(cfg.asrSampleRate));
+    assert.equal(url.searchParams.get("sample_rate"), String(cfg.audio.asrSampleRate));
     assert.equal(url.searchParams.get("language_hint"), "hi");
     asr.close();
   });
@@ -303,7 +301,7 @@ describe("deepgram flux frame parsing", () => {
   });
 
   it("errors rather than opening a socket with no key", async () => {
-    const cfg = testConfig({ deepgramApiKey: null, deepgramWsBase: `ws://127.0.0.1:${PORT}` });
+    const cfg = testConfig({ deepgram: { apiKey: null, wsBase: `ws://127.0.0.1:${PORT}` } });
     const asr = new DeepgramAsr(cfg, {});
     const errors: Error[] = [];
     asr.on("error", (e) => errors.push(e));

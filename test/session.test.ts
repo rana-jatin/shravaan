@@ -427,8 +427,8 @@ describe("session — ASR failover", () => {
   /** Failover configured, and a language the standby actually covers. */
   function failoverConfig() {
     return testConfig({
-      asrFailoverEnabled: true,
-      deepgramApiKey: "dg-test-key",
+      asrFailover: { enabled: true },
+      deepgram: { apiKey: "dg-test-key" },
       echoGuard: {
         suppressionWindowMs: 0,
         requireTranscript: true,
