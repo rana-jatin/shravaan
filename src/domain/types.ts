@@ -213,6 +213,27 @@ export type Fact = {
   source_sid: string;
 };
 
+/**
+ * Retrospective wellbeing signals for one session. Written by the memory worker,
+ * never by the turn loop — see src/domain/care-signals.ts and ADR 0009.
+ *
+ * OPTIONAL AT EVERY LEVEL, AND THAT IS THE CONTRACT. The whole object is absent
+ * when the session was not analysed (not English, too short, feature off, or the
+ * provider was down), and each field is absent when the provider did not return
+ * it. A reader must never treat a missing score as a neutral one: "we did not
+ * look" and "we looked and they were fine" are different weeks.
+ */
+export type CareSignals = {
+  provider: "deepgram";
+  analysed_at: Iso8601;
+  /** Whole-transcript average. `score` is -1..1; the label is Deepgram's banding. */
+  sentiment?: { label: "positive" | "neutral" | "negative"; score: number };
+  /** Per-segment scores in spoken order — enough to see a shift within one session. */
+  sentiment_segments?: number[];
+  /** Watch-list intents that fired, strongest first. Never an alarm; see care-signals.ts. */
+  flagged_intents?: Array<{ intent: string; confidence: number; text: string }>;
+};
+
 export type Episode = {
   id: string;
   uid: string;
@@ -229,6 +250,12 @@ export type Episode = {
   /** Join key back to the semantic store. */
   fact_ids: string[];
   mood?: "positive" | "neutral" | "negative" | "mixed";
+  /**
+   * Third-party analysis of this session, when one ran. Distinct from `mood`,
+   * which is the distiller's own read in the user's own language and is always
+   * available; this is numeric, English-only and frequently absent.
+   */
+  signals?: CareSignals;
 };
 
 // ---------------------------------------------------------------------------

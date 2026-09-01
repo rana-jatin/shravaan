@@ -15,7 +15,7 @@
  */
 
 import type { Fact, FactKind, MemWriteEvent } from "../domain/types.ts";
-import type { SarvamLlm } from "../providers/sarvam-llm.ts";
+import type { LlmClient } from "../providers/llm-client.ts";
 
 export type DistilledFact = {
   text: string;
@@ -66,9 +66,9 @@ export interface Distiller {
 }
 
 export class LlmDistiller implements Distiller {
-  readonly #llm: SarvamLlm;
+  readonly #llm: LlmClient;
 
-  constructor(llm: SarvamLlm) {
+  constructor(llm: LlmClient) {
     this.#llm = llm;
   }
 

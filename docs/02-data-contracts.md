@@ -338,12 +338,44 @@ type Episode = {
   /** Facts this episode produced. Join key back to the semantic store. */
   fact_ids: string[];
   mood?: "positive" | "neutral" | "negative" | "mixed";
+  /** Third-party analysis of this session, when one ran. See 4.3. */
+  signals?: CareSignals;
 };
 ```
 
 **Append-only, never edited.** An episode is what happened. Facts derived from it may be
 superseded; the episode itself is not revised. This is what makes "three weeks ago you
 said…" answerable at all.
+
+### 4.3 CareSignals — retrospective wellbeing read ([ADR 0009](adr/0009-audio-intelligence.md))
+
+```ts
+type CareSignals = {
+  provider: "deepgram";
+  analysed_at: string;        // RFC 3339
+  /** Whole-transcript average. score is -1..1; label uses Deepgram's ±0.333 banding. */
+  sentiment?: { label: "positive" | "neutral" | "negative"; score: number };
+  /** Per-segment scores in spoken order — a shift within one session. */
+  sentiment_segments?: number[];
+  /** Reviewed watch-list intents that fired, strongest first. `text` is the matched span. */
+  flagged_intents?: { intent: string; confidence: number; text: string }[];
+};
+```
+
+Written by the **memory worker** at session close, from the user's turns only, via Deepgram's
+`POST /v1/read`. Never written or read on the turn path — `recall_mood` reads episodes already
+in the store.
+
+**Optional at every level, and that is the contract.** The whole object is absent when the
+session was not analysed — not English, under 50 words, feature off, or the provider was
+unreachable. Each field is absent when the provider did not return it.
+
+| Reader must not | Because |
+|---|---|
+| Treat a missing `sentiment` as neutral | "We did not look" and "they were fine" are different weeks |
+| Treat `flagged_intents` as an alert | It is retrospective, English-only and hours late. Alarms are [`emergency-intent.ts`](../src/copy/emergency-intent.ts) |
+| Read it as a measurement of the person | It scores the words in a transcript, not prosody and not health |
+| Assume `sessions` covers the week | Only English sessions are analysed; a bilingual user's week is partly invisible |
 
 ---
 

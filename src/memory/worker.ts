@@ -13,6 +13,7 @@ import type { LongTermStore } from "./long-term-store.ts";
 import { buildProfile } from "./profile.ts";
 import type { MemWriteStream, StreamEntry } from "./stream.ts";
 import type { Distiller } from "./distiller.ts";
+import type { SignalsAnalyser } from "./care-signals-analyser.ts";
 import type { SessionStore } from "../store/session-store.ts";
 
 export type WorkerOptions = {
@@ -53,6 +54,7 @@ export class MemoryWorker {
    * docs/05-open-questions.md rather than pretended away.
    */
   readonly #processed = new Set<string>();
+  readonly #signals: SignalsAnalyser | null;
   #running = false;
 
   constructor(deps: {
@@ -60,12 +62,20 @@ export class MemoryWorker {
     longTerm: LongTermStore;
     sessions: SessionStore;
     distiller: Distiller;
+    /**
+     * Optional third-party read of the closing session. Absent — the default —
+     * means episodes carry the distiller's `mood` and nothing else, which is the
+     * behaviour every deployment had before ADR 0009 and the one nine of our
+     * eleven languages will always have.
+     */
+    signals?: SignalsAnalyser;
     options?: WorkerOptions;
   }) {
     this.#stream = deps.stream;
     this.#longTerm = deps.longTerm;
     this.#sessions = deps.sessions;
     this.#distiller = deps.distiller;
+    this.#signals = deps.signals ?? null;
     const o = deps.options ?? {};
     this.#opts = {
       consumerName: o.consumerName ?? `worker-${randomUUID().slice(0, 8)}`,
@@ -208,6 +218,31 @@ export class MemoryWorker {
     // record of what happened, and that is only known at the end.
     const closed = events.find((e) => e.kind === "session_closed");
     if (closed) {
+      const languages = [
+        ...new Set(events.map((e) => e.language).filter((l): l is string => !!l)),
+      ];
+
+      // Bounded, and off the voice path by virtue of being here at all — see the
+      // header of care-signals-analyser.ts. A null is "no signals for this
+      // session", which is the common case and not a failure.
+      //
+      // The catch is belt and braces over an analyser that already swallows its
+      // own errors: a throw here would abandon the batch BEFORE the ack while
+      // `#processed` has already marked these events seen, so the episode would
+      // be lost permanently rather than retried. An optional extra must never be
+      // able to cost us the record of what happened.
+      let signals: Awaited<ReturnType<SignalsAnalyser>> = null;
+      if (this.#signals) {
+        try {
+          signals = await this.#signals({ events, languages });
+        } catch (err) {
+          this.#opts.log("warn", "care signals threw; writing the episode without them", {
+            sid,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       const episode: Episode = {
         id: randomUUID(),
         uid,
@@ -215,12 +250,13 @@ export class MemoryWorker {
         started_at: events[0]!.at,
         ended_at: closed.at,
         turn_count: closed.turn_count ?? events.length,
-        languages: [...new Set(events.map((e) => e.language).filter((l): l is string => !!l))],
+        languages,
         summary: distilled.summary,
         topics: distilled.topics,
         open_threads: distilled.open_threads.map((text) => ({ id: randomUUID(), text })),
         fact_ids: factIds,
         ...(distilled.mood ? { mood: distilled.mood } : {}),
+        ...(signals ? { signals } : {}),
       };
       await this.#longTerm.appendEpisode(episode);
       result.episodesWritten++;

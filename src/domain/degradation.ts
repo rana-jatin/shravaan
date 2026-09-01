@@ -36,7 +36,7 @@ export type DegradationKey =
   | "asr_failover_active"
   | "asr_unavailable"
   | "tts_unavailable"
-  | "llm_rate_limited"
+  | "llm_retrying"
   | "llm_unavailable"
   | "tools_unavailable";
 
@@ -91,7 +91,7 @@ export const DEGRADATIONS: Record<DegradationKey, DegradationSpec> = {
     // The one message that cannot be synthesised, because synthesis is what broke.
     requires_prerendered_audio: true,
   },
-  llm_rate_limited: {
+  llm_retrying: {
     severity: "shallow",
     lost: "nothing yet — retrying within the turn budget",
   },

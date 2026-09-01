@@ -41,6 +41,12 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import type { Config } from "../config/env.ts";
 import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "../domain/backoff.ts";
+import type { TtsClient, TtsEvents, TtsOptions } from "./tts-client.ts";
+
+// The surface the orchestrator holds lives on the interface now
+// (./tts-client.ts), so `Session` can be built against a fake. Re-exported here
+// so every existing importer keeps its current import line.
+export type { TtsClient, TtsEvents, TtsOptions } from "./tts-client.ts";
 
 /** Sarvam's documented idle close is ~60s; ping well inside it. */
 const KEEPALIVE_MS = 25_000;
@@ -55,28 +61,10 @@ const QUEUE_MAX_AGE_MS = 3000;
 /** Belt and braces on the age limit, for a pathological burst. */
 const QUEUE_MAX_ITEMS = 24;
 
-export type TtsOptions = {
-  languageCode: string;
-  speaker: string;
-  pace?: number;
-};
+/** @deprecated Use `TtsEvents`. Kept so older imports keep resolving. */
+export type SarvamTtsEvents = TtsEvents;
 
-export interface SarvamTtsEvents {
-  open: [];
-  audio: [Buffer];
-  /** Emitted when the server signals the current utterance is complete. */
-  done: [];
-  error: [Error];
-  close: [{ code: number; reason: string }];
-  /** A transparent reconnect is under way. Informational — not yet a failure. */
-  reconnecting: [{ attempt: number; delayMs: number }];
-  /** Reconnect exhausted its budget. The system now has no voice at all. */
-  unavailable: [Error];
-  /** Speech was queued during an outage and discarded for being too old. */
-  dropped: [{ chars: number; ageMs: number }];
-}
-
-export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
+export class SarvamTts extends EventEmitter<TtsEvents> implements TtsClient {
   #ws: WebSocket | null = null;
   #keepalive: NodeJS.Timeout | null = null;
   #reconnectTimer: NodeJS.Timeout | null = null;
@@ -157,15 +145,26 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
   }
 
   #sendConfig(): void {
+    // Every frame on this socket is {type, data:{…}}. The flat version this
+    // sent first was rejected against a live key with
+    //   422 "Input parameters has to be a valid dictionary"
+    // on every connect, so the socket opened, configured, failed and reconnected
+    // in a loop without ever synthesising a word. Nesting the payload under
+    // `data` gets through to field validation.
+    //
+    // `target_language_code`, not `language_code` — the nested frame is accepted
+    // with the former. docs/05-open-questions.md Q12
     this.#send({
       type: "config",
-      speaker: this.#opts.speaker,
-      language_code: this.#opts.languageCode,
-      pace: this.#opts.pace ?? this.#cfg.ttsPace,
-      output_audio_codec: "linear16",
-      // Bulbul streaming is capped at 24 kHz; env validation enforces this.
-      sample_rate: this.#cfg.ttsSampleRate,
-      send_completion_event: true,
+      data: {
+        speaker: this.#opts.speaker,
+        target_language_code: this.#opts.languageCode,
+        pace: this.#opts.pace ?? this.#cfg.ttsPace,
+        output_audio_codec: "linear16",
+        // Bulbul streaming is capped at 24 kHz; env validation enforces this.
+        sample_rate: this.#cfg.ttsSampleRate,
+        send_completion_event: true,
+      },
     });
     this.#configured = true;
   }
@@ -202,7 +201,7 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
       return;
     }
     if (!this.#configured) this.#sendConfig();
-    this.#send({ type: "text", text: trimmed });
+    this.#send({ type: "text", data: { text: trimmed } });
   }
 
   /** Force synthesis of whatever is buffered, ignoring min_buffer_size. */
@@ -254,7 +253,7 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
         this.emit("dropped", { chars: item.text.length, ageMs });
         continue;
       }
-      this.#send({ type: "text", text: item.text });
+      this.#send({ type: "text", data: { text: item.text } });
       spoke = true;
     }
     if (spoke) this.flush();
@@ -269,17 +268,37 @@ export class SarvamTts extends EventEmitter<SarvamTtsEvents> {
       return;
     }
 
+    // Bulbul wraps every frame's payload in `data`:
+    //   {"type":"error","data":{"request_id":"…","message":"…","code":422}}
+    // The original code read these fields at the top level, where they are not.
+    // `data` was even consulted for the audio payload — as if it were the base64
+    // string rather than the object containing it — so a correct audio frame
+    // would have been dropped too. Look inside `data` first, and keep the flat
+    // reads as a fallback. docs/05-open-questions.md Q12
     const type = String(msg["type"] ?? "");
-    if (type === "audio" || msg["audio"] !== undefined) {
-      const b64 = msg["audio"] ?? (msg["data"] as unknown);
+    const data = (typeof msg["data"] === "object" && msg["data"] !== null
+      ? (msg["data"] as Record<string, unknown>)
+      : {}) as Record<string, unknown>;
+
+    if (type === "audio" || data["audio"] !== undefined || typeof msg["audio"] === "string") {
+      const b64 = data["audio"] ?? msg["audio"];
       if (typeof b64 === "string") this.emit("audio", Buffer.from(b64, "base64"));
       return;
     }
     if (type === "error") {
-      this.emit("error", new Error(String(msg["message"] ?? "TTS error")));
+      const detail = data["message"] ?? msg["message"] ?? data["error"] ?? msg["error"];
+      const code = data["code"] ?? msg["code"];
+      this.emit(
+        "error",
+        new Error(
+          typeof detail === "string" && detail.trim() !== ""
+            ? `${detail}${code !== undefined ? ` (code ${String(code)})` : ""}`
+            : `TTS error frame with no recognised message field: ${raw.toString().slice(0, 300)}`,
+        ),
+      );
       return;
     }
-    if (msg["event_type"] === "final" || type === "done") {
+    if (data["event_type"] === "final" || msg["event_type"] === "final" || type === "done") {
       this.emit("done");
     }
   }

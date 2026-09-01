@@ -25,10 +25,16 @@
  * that is a real, if survivable, downgrade — hence `asr_failover_active` is a
  * logged degradation and not a silent swap.
  *
- * ⚠ The auth header below uses Deepgram's standard `Authorization: Token <key>`
- * scheme. That specific line was NOT captured in the Phase-1 research tables
- * (docs/00-provider-research.md), so treat it as the one unverified detail here —
- * everything else on this page carries a source URL above.
+ * VERIFIED AGAINST A LIVE KEY, 2026-09-01, with `npm run verify:asr`. The auth
+ * header is Deepgram's standard `Authorization: Token <key>` — flagged here as
+ * unverified until that run, since it was never captured in the Phase-1 research
+ * tables (docs/00-provider-research.md), and now confirmed correct.
+ *
+ * ⚠ What the same run found instead: the frame discriminant was read one level
+ * too high, and the standby had therefore never emitted a single word since the
+ * day it was written. See the note on `#onMessage` and D11 in
+ * docs/07-defect-register.md. Nothing on this page should be trusted because it
+ * looks reasonable; run the verifier.
  */
 
 import { EventEmitter } from "node:events";
@@ -104,7 +110,17 @@ export class DeepgramAsr extends EventEmitter<AsrEvents> implements AsrClient {
       return;
     }
 
-    switch (String(msg["type"] ?? "")) {
+    // ⚠ THE DISCRIMINANT IS NESTED. Flux puts the turn lifecycle one level down:
+    // every turn event arrives as `{"type":"TurnInfo","event":"Update"}`, and only
+    // the connection-level frames (Connected, Error) carry their name in `type`.
+    //
+    // Switching on `type` alone — which this file did until 2026-09-01 — sends
+    // EVERY transcript to the default arm. The socket opens, audio flows, the
+    // provider bills, and not one word is emitted. Verified against a live key
+    // with `npm run verify:asr`; see D11 in docs/07-defect-register.md.
+    const kind = String((msg["type"] === "TurnInfo" ? msg["event"] : msg["type"]) ?? "");
+
+    switch (kind) {
       case "StartOfTurn":
         // Deepgram's own guidance: this is "more reliable than an external VAD"
         // for barge-in. It maps onto Sarvam's vad.speech_start exactly.
@@ -180,7 +196,12 @@ export class DeepgramAsr extends EventEmitter<AsrEvents> implements AsrClient {
 function toTranscript(msg: Record<string, unknown>): AsrTranscript {
   const out: AsrTranscript = { text: String(msg["transcript"] ?? "") };
 
-  if (typeof msg["language"] === "string") out.language = msg["language"];
+  // `languages`, plural and an array — Flux lists every language it heard in the
+  // window, dominant first. There is no singular `language` field on this
+  // endpoint, so the previous read resolved to undefined on every frame and the
+  // standby never reported a language at all.
+  const langs = msg["languages"];
+  if (Array.isArray(langs) && typeof langs[0] === "string") out.language = langs[0];
 
   // The field Sarvam does not have. Mean word confidence stands in for an
   // utterance score; absent means absent, never a default of 1.0 — a fabricated

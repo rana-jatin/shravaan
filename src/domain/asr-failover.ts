@@ -68,7 +68,18 @@ export function standbyFor(
     return {
       available: false,
       reason: "not_configured",
-      detail: "DEEPGRAM_API_KEY is unset, so the standby exists on paper only",
+      // Two separate conditions gate this — ASR_FAILOVER_ENABLED and the key —
+      // and the caller collapses them into one boolean. Naming only the key sent
+      // an operator hunting for a missing credential during an incident where
+      // the key was present and the flag was off, which is the likelier case
+      // since the flag is the one that defaults to disabled. The boot log prints
+      // both separately; say so rather than guessing which one.
+      // No "no standby:" prefix here — session.ts already wraps this detail in
+      // that phrase, and saying it twice reads as a stutter in the one log line
+      // someone reads during an outage.
+      detail:
+        "ASR_FAILOVER_ENABLED is off or DEEPGRAM_API_KEY is unset — " +
+        "the boot log reports which",
     };
   }
 

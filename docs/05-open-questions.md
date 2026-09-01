@@ -31,10 +31,33 @@ but that runs in **their** orchestration layer, which we are not using
 The capability clearly exists in the model; what is unconfirmed is what the raw socket
 exposes.
 
-**How to settle it.** Open the socket three ways — `language_code=auto`,
-`language_code=unknown`, omitted entirely — and speak a Hindi→English switch mid-stream.
-Observe whether the connection is accepted, whether finals carry a `language` field, and
-whether the text follows the switch. Half a day. See [Slice 0](04-milestones.md#slice-0--two-listening-tests-half-a-day-no-product).
+**ANSWERED — 2026-08-29, against a live key. The token is `auto`.**
+
+The socket was opened with every candidate. `auto` is accepted; `unknown` is rejected
+outright, and the rejection names the supported set:
+
+```
+4000 Unsupported language_code 'unknown'. Supported values: auto, hi-IN, bn-IN,
+kn-IN, ml-IN, mr-IN, or-IN, pa-IN, ta-IN, te-IN, …
+```
+
+So the **realtime streaming page was right** and the Saaras model page — the source of
+`unknown`, and of our default — describes the batch endpoint, not this socket. Two
+consequences, both now fixed:
+
+- `ASR_AUTODETECT_TOKEN` defaulted to `unknown`, which is every session with no profile
+  and no locale hint. It now defaults to `auto`.
+- The list says **`or-IN`**. We used `od-IN` throughout, which is not an ISO 639-1 code
+  and was rejected — Odia could never have worked. Renamed repo-wide.
+
+Also confirmed live: `hi-IN` speech transcribes, and finals carry a detected language
+(`gate2` logged `detected: hi-IN` from a Hindi clip).
+
+**Still open:** whether a *mid-stream* switch works — `config.update` with a new
+`language_code`, or `auto` following the speaker from Hindi into English within one
+connection. That needs the bilingual utterance from
+[Slice 0](04-milestones.md#slice-0--two-listening-tests-half-a-day-no-product), and a
+person to speak it.
 
 ---
 
@@ -253,6 +276,21 @@ a user's voice out of India, mid-conversation, with nobody having decided that. 
 owns the data-protection posture has to answer this before the flag is turned on in any
 environment with real users. See [ADR 0008 §6](adr/0008-degradation-policy.md).
 
+**Widened by the external tools.** The ASR standby is no longer the only way out of the
+country. `get_weather` reaches Open-Meteo, which is EU-hosted, so an enabled deployment sends a
+**place name** abroad on every weather question — and unlike the failover, which fires only
+during an outage, this one fires whenever the user asks. The exposure is much smaller (a city
+name against an audio stream) and the same mitigation applies: `WEATHER_ENABLED=false` by
+default, and nothing is registered when it is off, so the model never even sees the tool.
+
+`get_news` is deliberately **not** in the same position. It takes RSS feed URLs rather than a
+vendor (`NEWS_FEEDS`), so pointing it at a domestic outlet keeps that hop inside India — the
+configuration shape is itself the mitigation. No default feeds ship, which also means no
+default egress.
+
+Both belong in the same conversation as the failover flag, and both are answerable
+independently of it: a deployment can run news-only and stay fully India-resident.
+
 ---
 
 ## Resolved during research
@@ -261,7 +299,7 @@ Recorded so they are not re-litigated.
 
 | Question | Answer | Source |
 |---|---|---|
-| What is the language scope? | **Bulbul's 11 languages, final**: `hi-IN`, `bn-IN`, `ta-IN`, `te-IN`, `gu-IN`, `kn-IN`, `ml-IN`, `mr-IN`, `pa-IN`, `od-IN`, `en-IN`, plus Hinglish and code-mixing within that set | Product decision, 2026-08-29 |
+| What is the language scope? | **Bulbul's 11 languages, final**: `hi-IN`, `bn-IN`, `ta-IN`, `te-IN`, `gu-IN`, `kn-IN`, `ml-IN`, `mr-IN`, `pa-IN`, `or-IN`, `en-IN`, plus Hinglish and code-mixing within that set | Product decision, 2026-08-29 |
 | What about the 12 languages Saaras hears but Bulbul cannot speak? | **Out of scope, refused at session open.** No second TTS vendor, no translation substitution. Urdu is the accepted loss | [ADR 0005](adr/0005-tts-provider-split.md) |
 | Can Deepgram carry any part of the TTS path? | **No.** Aura-2 has no Indic voice, and non-Indic is out of scope — Deepgram TTS is entirely unused | [TTS overview](https://developers.deepgram.com/docs/tts-models-languages-overview.md) |
 | Can Deepgram carry the ASR path? | **No.** `flux-general-multi` reaches one Indic language. Foreclosed by the scope decision | [language prompting](https://developers.deepgram.com/docs/flux/language-prompting.md) |
@@ -273,6 +311,94 @@ Recorded so they are not re-litigated.
 | Does Deepgram support streaming diarization? | Yes, `diarize_model=v1|latest`; speaker without confidence on streaming | [diarization](https://developers.deepgram.com/docs/diarization.md) |
 | Is there a barge-in trigger we should use? | Yes — `vad.speech_start` or early partials, **never** `transcript.final` (Sarvam); `StartOfTurn` (Deepgram) | [conversation settings](https://docs.sarvam.ai/conversations/build/conversation-settings), [Flux state](https://developers.deepgram.com/docs/flux/state.md) |
 | Can the JS SDK reach Sarvam's `codemix` mode? | **No** — "any `mode` you pass is silently dropped" | [streaming guide](https://docs.sarvam.ai/api/api-guides-tutorials/speech-to-text/streaming-api) |
+
+### Q15. Who confirms a destructive calendar change, and how?
+
+`add_appointment` ships; **`cancel_appointment` deliberately does not.**
+
+The asymmetry is the whole point. Creating a wrong appointment is recoverable and audible —
+the companion reads it back, and a spurious entry is an annoyance. Deleting the right one is
+neither. A voice agent that mishears "cancel the physio" can remove a hospital appointment,
+and the user has **no screen on which to notice it is gone**. They find out by not being
+there.
+
+Three things have to be decided before a delete tool exists:
+
+1. **What confirmation sounds like.** A spoken read-back and a yes/no is a *turn*, not a tool
+   call — the model would have to hold a pending action across turns, which nothing in the
+   orchestrator does today. It is closer to the media-stop path in
+   [`stop-intent.ts`](../src/copy/stop-intent.ts) than to a tool.
+2. **Whether "yes" is enough.** Elderly users are documented as agreeing readily with a
+   confident assistant. A confirmation that is easy to say yes to is not a safeguard.
+3. **Whether delete should be soft.** The API offers only `DELETE`. Moving an event to a
+   "cancelled by the companion" calendar instead would be reversible, at the cost of leaving
+   the real appointment in place if the user genuinely meant it.
+
+Until those are answered, the credential can still be shared as **"See all event details"**
+rather than "Make changes", which removes the capability at the source rather than trusting
+the code not to use it. Referenced from [`calendar.ts`](../src/tools/calendar.ts).
+
+### Q16. Which Google credential does a real deployment use?
+
+Settled enough to build against, recorded because the reasoning is easy to lose.
+
+An **API key cannot serve this product**. It answers "which project is calling", carries no
+user identity and therefore no OAuth scope; Google's
+[discovery document](https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest) lists a
+required scope on every write method, and there is no public-write scope to match
+`calendar.events.public.readonly` on the read side. So a key reads public calendars and does
+nothing else — verified live: an unauthenticated call to a **public** calendar is already a
+403.
+
+**OAuth** works but needs a consent screen, a token store and a refresh cycle, and an app left
+in Testing mode expires refresh tokens after seven days.
+
+**A service account is the fit**, and the reason is a product one rather than a technical one:
+the user shares their calendar with the account's `client_email` exactly as they would share
+with a person. No consent screen ever, and it works on a consumer Gmail calendar rather than
+only Workspace — which matters, because the constraint that shaped this whole feature is that
+the end user cannot complete an OAuth flow.
+
+Open part: **whose** Google Cloud project holds that service account in a real deployment, and
+what happens to the shared calendars when its key is rotated.
+
+---
+
+### Q17. Do Deepgram's intelligence features work on a live stream, or not?
+
+Deepgram's documentation contradicts itself, and the two halves are one click apart.
+
+The feature pages for [sentiment](https://developers.deepgram.com/docs/sentiment-analysis.md),
+[topics](https://developers.deepgram.com/docs/topic-detection.md),
+[intents](https://developers.deepgram.com/docs/intent-recognition.md) and
+[summarisation](https://developers.deepgram.com/docs/summarization.md) each carry a
+**`Streaming:Nova`** badge alongside `Pre-recorded`. But the
+[streaming feature matrix](https://developers.deepgram.com/docs/stt-streaming-feature-overview.md)
+lists exactly one feature under *Intelligence* — Entity Detection — and none of these four.
+
+Nothing we ship depends on the answer, which is why this is a question and not a defect:
+[ADR 0009](adr/0009-audio-intelligence.md) puts the analysis in the memory worker on a batch
+endpoint, and our streaming path is Flux `/v2/listen`, which has none of these features under
+either reading. It matters only if someone later wants a live signal — at which point the
+badge must be tested, not believed.
+
+The same intent page also badges itself **"All available languages"** while its own parameter
+table says `language` `en` — "Only English is supported at this time". We build on the table.
+
+---
+
+### Q18. What does `/v1/read` cost?
+
+Unknown, and deliberately not guessed at. Deepgram's Text Intelligence pricing was not fetched
+during this work, so nothing in [ADR 0009](adr/0009-audio-intelligence.md) reasons about cost —
+the decisions there are made on residency, coverage and consent, all of which hold at any
+price.
+
+What is known: the input cap is 150K tokens, and `summarize` on an input under 50 words returns
+the input unbilled. We do not send `summarize` at all, and the `MIN_WORDS` floor in
+[`care-signals.ts`](../src/domain/care-signals.ts) keeps short sessions off the wire entirely,
+so the billed volume is roughly "one call per closed English session over fifty words". Someone
+with console access should price that before a fleet of devices runs it nightly.
 
 ---
 

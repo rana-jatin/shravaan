@@ -50,6 +50,17 @@ export function loadConfig() {
     );
   }
 
+  // Fail at boot, not at the end of the first English session. The alternative
+  // is a deployment that believes it is recording wellbeing signals and silently
+  // writes none for a week — a broken feature nobody is watching is worse than a
+  // process that will not start.
+  if (opt("CARE_SIGNALS_ENABLED", "false") === "true" && !process.env["DEEPGRAM_API_KEY"]?.trim()) {
+    throw new Error(
+      "CARE_SIGNALS_ENABLED=true requires DEEPGRAM_API_KEY — the analysis runs on " +
+        "Deepgram's /v1/read. See docs/adr/0009-audio-intelligence.md.",
+    );
+  }
+
   return {
     sarvamApiKey: req("SARVAM_API_KEY"),
 
@@ -61,23 +72,71 @@ export function loadConfig() {
 
     asrModel: opt("SARVAM_ASR_MODEL", "saaras:v3-realtime"),
     ttsModel: opt("SARVAM_TTS_MODEL", "bulbul:v3"),
-    llmModel: opt("SARVAM_LLM_MODEL", "sarvam-105b"),
+
+    /**
+     * `sarvam-105b-conversations`, NOT `sarvam-105b`. Both are live on
+     * `/v1/models`; only one of them can hold a conversation.
+     *
+     * sarvam-105b is a REASONING model. It streams thousands of characters of
+     * `reasoning_content` before the first `content` token, and nothing about
+     * that is visible in the response shape until you look for the field.
+     * Measured over 12 identical calls, 2026-08-30:
+     *
+     *                        sarvam-105b    sarvam-105b-conversations
+     *   first content token   12,777 ms     313 ms      (median)
+     *   reasoning_content     4.9k-7.8k     0            chars/turn
+     *   empty completions     3/12          0/12
+     *   dropped connections   2/12          0/12
+     *
+     * The latency alone disqualifies it: the clause chunker exists to start
+     * synthesis at the first clause boundary, and it cannot start before a
+     * clause exists. Twelve seconds of silence is not a companion.
+     *
+     * The empty completions were the same cause, not a separate fault — the
+     * reasoning burn is what exhausted capacity. Sarvam sheds load as a 200 with
+     * zero content deltas, or a dropped socket. Never a 429.
+     *
+     * Two things carry over to the conversations model, so do not delete them:
+     * the `{}{}` argument retransmission (`accumulateArgs`), which still occurs;
+     * and `max_tokens` counting reasoning tokens, which is only harmless while
+     * the reasoning model is unused.
+     *
+     * KNOWN, and off the product path: `tool_choice: "required"` degenerates on
+     * this model — it emits the call, then loops whitespace to the token cap
+     * (87 s, finish_reason "length"). The orchestrator only ever sends "auto"
+     * and "none" (src/orchestrator/session.ts). Keep it that way.
+     */
+    llmModel: opt("SARVAM_LLM_MODEL", "sarvam-105b-conversations"),
 
     asrSampleRate,
     ttsSampleRate,
     deviceFrameMs: num("DEVICE_FRAME_MS", 80),
 
-    ttsSpeaker: opt("TTS_SPEAKER", "Shubh"),
+    ttsSpeaker: opt("TTS_SPEAKER", "shubh"),
     ttsPace: num("TTS_PACE", 1.0),
 
     defaultSeedLanguage: opt("DEFAULT_SEED_LANGUAGE", "hi-IN"),
+
     /**
-     * Sarvam's docs disagree on this token: "auto" (realtime page) vs "unknown"
-     * (Saaras page and the agent product) vs explicit-required (streaming
-     * guide). Slice 0 must establish which the socket actually accepts.
-     * docs/05-open-questions.md Q1
+     * Fallback for `get_time` when JSON context carries no `identity.timezone`.
+     * The model has no clock, so a wrong zone here is a confidently wrong answer
+     * rather than a missing one — set it per deployment region.
      */
-    asrAutodetectToken: opt("ASR_AUTODETECT_TOKEN", "unknown"),
+    defaultTimezone: opt("DEFAULT_TIMEZONE", "Asia/Kolkata"),
+    /**
+     * ANSWERED against a live key, 2026-08-29: the token is `auto`.
+     *
+     * Sarvam's docs gave three answers — "auto" (realtime page), "unknown"
+     * (Saaras page and the agent product), and explicit-required (streaming
+     * guide) — and this defaulted to "unknown", which the socket rejects:
+     *
+     *   4000 Unsupported language_code 'unknown'. Supported values: auto,
+     *   hi-IN, bn-IN, kn-IN, ml-IN, mr-IN, or-IN, pa-IN, ta-IN, te-IN, …
+     *
+     * That is every session with no profile and no locale hint, so the default
+     * mattered. docs/05-open-questions.md Q1
+     */
+    asrAutodetectToken: opt("ASR_AUTODETECT_TOKEN", "auto"),
 
     /**
      * Echo guard. NOT a substitute for device-side AEC — the second layer that
@@ -126,6 +185,42 @@ export function loadConfig() {
     /** Flux Multilingual: the only Deepgram streaming model that reaches Hindi. */
     deepgramModel: opt("DEEPGRAM_ASR_MODEL", "flux-general-multi"),
 
+    // --- Care signals (ADR 0009) ---------------------------------------------
+
+    /**
+     * Retrospective wellbeing analysis of CLOSED sessions, via Deepgram's
+     * `/v1/read`. Off by default, for three separate reasons and any one of them
+     * is enough:
+     *
+     *   1. RESIDENCY. Same call as `asrFailoverEnabled` above, one notch down:
+     *      what crosses the border is a transcript rather than the voice itself.
+     *      Still the user's words, still leaving India. Q14.
+     *   2. COVERAGE. English only — every feature on that endpoint is. Ten of our
+     *      eleven languages get nothing, forever, and a deployment that speaks
+     *      Tamil should not be paying for a Deepgram key to receive silence.
+     *   3. CONSENT. Scoring how someone sounded and keeping the trend is a
+     *      different promise from remembering what they told you. It belongs to
+     *      whoever wrote the consent form, not to a default.
+     *
+     * NOTHING ON THE VOICE PATH READS THIS. The analysis runs in the memory
+     * worker; `recall_mood` reads what it wrote. See ADR 0009.
+     */
+    careSignalsEnabled: opt("CARE_SIGNALS_ENABLED", "false") === "true",
+    /** Same host as the ASR standby, different scheme — this half is REST. */
+    deepgramReadBase: opt("DEEPGRAM_READ_BASE", "https://api.deepgram.com"),
+    /**
+     * Hard cap on the analysis round trip. Generous, because nobody is waiting on
+     * it — but bounded, because a wedged HTTP call becomes consumer lag, and
+     * consumer lag is how long the companion has been out of date.
+     */
+    careSignalsDeadlineMs: num("CARE_SIGNALS_DEADLINE_MS", 8000),
+    /**
+     * Confidence floor for a watch-list intent. ⚠ A GUESS: Deepgram publishes no
+     * calibration for `confidence_score`. Tune it against real transcripts before
+     * anyone acts on the output. See mapIntents in src/domain/care-signals.ts.
+     */
+    careSignalsIntentConfidence: num("CARE_SIGNALS_INTENT_CONFIDENCE", 0.5),
+
     /**
      * Pre-rendered apology audio for a Bulbul outage. Generated ahead of time by
      * `npm run render:holding` — you cannot render it during the outage it exists
@@ -140,7 +235,340 @@ export function loadConfig() {
      */
     memWriteBufferCapacity: num("MEM_WRITE_BUFFER", 500),
 
+    // --- External tools -------------------------------------------------------
+
+    /**
+     * Weather, via Open-Meteo. OFF BY DEFAULT, for the reason ASR failover is.
+     *
+     * Open-Meteo needs no key and charges nothing, which makes it the obvious
+     * choice on every axis except the one this product cares about: it is
+     * EU-hosted, so a weather question sends a place name out of India. That is
+     * a much smaller exposure than routing a user's VOICE to Deepgram — a city
+     * name against an audio stream — but it is the same decision, and it belongs
+     * to whoever owns the data-protection posture. See docs/05-open-questions.md
+     * Q14 and the divider above `createGetWeather`.
+     *
+     * Swapping providers is a config change plus the response mapping in
+     * builtin.ts, which assumes Open-Meteo's `current`/`daily` shape.
+     */
+    weatherEnabled: opt("WEATHER_ENABLED", "false") === "true",
+    weatherApiBase: opt("WEATHER_API_BASE", "https://api.open-meteo.com"),
+    weatherGeocodeBase: opt("WEATHER_GEOCODE_BASE", "https://geocoding-api.open-meteo.com"),
+    /**
+     * Only used when the model sends a blank place — never to override one it
+     * gave. Unset means the companion asks which city, which is the right answer
+     * far more often than a guess is.
+     */
+    weatherDefaultPlace: process.env["WEATHER_DEFAULT_PLACE"]?.trim() || null,
+
+    /**
+     * Country tried FIRST when geocoding, then abandoned if it finds nothing.
+     *
+     * Not cosmetic. Asked for "Allahabad", an unbiased Open-Meteo query returns
+     * ten Iranian villages and no Indian hit — a live call returned weather for
+     * Razavi Khorasan, fluently and with nothing to mark it wrong. A preference
+     * rather than a filter, so "London" still resolves to Britain on the retry.
+     * Empty disables it. See PLACE_ALIASES in src/tools/builtin.ts.
+     */
+    weatherCountryBias: opt("WEATHER_COUNTRY_BIAS", "IN") || null,
+
+    /**
+     * India Post, for six-digit PIN codes — which Open-Meteo cannot geocode at
+     * all. Empty disables pincode support and the tool asks for a place name.
+     *
+     * One for the residency ledger: this host is in India, so the lookup most
+     * likely to be phrased as a number never leaves the country.
+     */
+    weatherPincodeApiBase: opt("WEATHER_PINCODE_API", "https://api.postalpincode.in") || null,
+
+    /**
+     * News, via RSS. Also off by default, and configured as feed URLs rather
+     * than a vendor — which is deliberate: it lets a deployment point at a
+     * domestic outlet and keep the hop in India, where a news API would not.
+     *
+     * Format: `category=url` pairs, comma-separated. Categories outside
+     * NEWS_CATEGORIES are ignored at registration, and only the categories
+     * actually configured are offered to the model as enum values.
+     *
+     *   NEWS_FEEDS="top=https://…/national.rss,sports=https://…/sport.rss"
+     *
+     * No default feeds ship, and that is not laziness. A wrong URL here is a
+     * companion confidently reading someone else's headlines, and the repo has
+     * no way to verify a feed it has never fetched — the same honesty the
+     * Sarvam API bases carry above (Q12).
+     */
+    newsFeeds: parsePairs(process.env["NEWS_FEEDS"]).pairs,
+    /**
+     * Comma-separated segments that carried no `=`, in order.
+     *
+     * Almost always the tail of a URL that contained a literal comma: the pair
+     * splits, the first half stays a perfectly valid URL, and the rest lands
+     * here. Surfaced rather than dropped because the alternative is a feed that
+     * 404s at request time with nothing in the log pointing at the config.
+     */
+    newsFeedsDropped: parsePairs(process.env["NEWS_FEEDS"]).dropped,
+    newsHeadlineLimit: num("NEWS_HEADLINE_LIMIT", 5),
+
+    /**
+     * Music. Radio needs nothing; songs need a YouTube key.
+     *
+     * Off by default like the other external tools — but note the egress here is
+     * larger than weather's. Station METADATA comes from Radio Browser (EU), and
+     * the audio streams from whichever third-party host the station runs on.
+     * See docs/05-open-questions.md Q14.
+     */
+    musicEnabled: opt("MUSIC_ENABLED", "false") === "true",
+    /**
+     * Drop every non-stop transcript while media plays.
+     *
+     * OFF. It was on, and it was wrong: asking for the weather over the radio
+     * got silence, and a companion that stops listening the moment it starts
+     * entertaining you is not a companion.
+     *
+     * The cost of leaving it off is real — the ASR transcribes song lyrics as
+     * user speech, and the model will sometimes answer them. Turn this on if
+     * that becomes intolerable before ducking exists. "Stop" is matched locally
+     * either way and is never affected by this setting.
+     */
+    restrictListeningDuringMedia: opt("MUSIC_RESTRICT_LISTENING", "false") === "true",
+    /**
+     * Playback volume, 0-100, applied when a stream starts.
+     *
+     * Below 100 because there is still no device-side AEC. It used to be the
+     * ONLY defence: with no ducking, any real volume meant the microphone heard
+     * the loudspeaker instead of the person, the ASR never reported speech, and
+     * the companion appeared to stop listening — reported live at 55.
+     *
+     * The device now ducks under both voices (MUSIC_DUCK_VOLUME), so this is a
+     * comfort setting again rather than the thing keeping the product usable.
+     */
+    musicVolume: num("MUSIC_VOLUME", 70),
+    /**
+     * Level the music drops to while anyone is speaking, 0-100.
+     *
+     * Read by the DEVICE, not the server — ducking has to react before the ASR
+     * could possibly report anything, because the ASR is the thing that cannot
+     * hear over the music. See the DUCKING note in scripts/device-client.ts.
+     *
+     * Low, not zero: a stream that goes silent sounds broken, where one that
+     * drops under a voice sounds deliberate.
+     */
+    musicDuckVolume: num("MUSIC_DUCK_VOLUME", 15),
+    musicRadioApi: opt("MUSIC_RADIO_API", "https://de1.api.radio-browser.info"),
+    /**
+     * How often to refill the station list. Never inside a turn — a refresh of
+     * six languages measured 4.4 s against the live directory, and it is
+     * somebody's volunteer server.
+     */
+    musicRefreshMinutes: num("MUSIC_REFRESH_MINUTES", 180),
+    /** Fallbacks handed to the device per lookup. Stations rot; one is not enough. */
+    musicStationsPerLanguage: num("MUSIC_STATIONS_PER_LANGUAGE", 3),
+    /**
+     * Drop plain-http streams. 15% of Indian stations are unencrypted, and the
+     * device fetches whatever URL a community-edited directory returns.
+     */
+    musicSecureOnly: opt("MUSIC_SECURE_ONLY", "true") !== "false",
+    /**
+     * Offered — never taken silently — when a language has no stations at all.
+     * Gujarati has zero in the directory. Empty means say so and stop.
+     */
+    musicFallbackLanguage: opt("MUSIC_FALLBACK_LANGUAGE", "hi-IN") || null,
+    /**
+     * YouTube Data API key. Absent means `song` mode is not offered at all — the
+     * `mode` enum shrinks to ["radio"].
+     *
+     * Quota: search costs 100 of 10,000 free daily units, so 100 searches a day.
+     * Fine for a prototype, not for users.
+     */
+    youtubeApiKey: process.env["YOUTUBE_API_KEY"]?.trim() || null,
+    youtubeApiBase: opt("YOUTUBE_API_BASE", "https://www.googleapis.com"),
+
+    /**
+     * Calendars, as iCal feed URLs. `label=url` pairs, same parsing as NEWS_FEEDS.
+     *
+     * The CREDENTIAL-FREE path, and still the fallback: Google publishes a
+     * per-calendar "secret address in iCal format" under Settings > Integrate
+     * calendar, and a caregiver pastes that one URL. No OAuth, no tokens, no
+     * Google Cloud project. Read-only.
+     *
+     * ⚠ THE URL IS THE CREDENTIAL. It carries a `private-<hash>` segment and
+     * anyone holding it can read that diary indefinitely, with no login and no
+     * audit trail. It is a secret shaped like a link — never log it whole.
+     *
+     * The label is SPOKEN, so name it as a person would: `amma=https://...`.
+     *
+     *   CALENDAR_FEEDS="mine=https://calendar.google.com/calendar/ical/.../basic.ics"
+     */
+    calendarFeeds: parsePairs(process.env["CALENDAR_FEEDS"]).pairs,
+    calendarFeedsDropped: parsePairs(process.env["CALENDAR_FEEDS"]).dropped,
+    calendarEventLimit: num("CALENDAR_EVENT_LIMIT", 6),
+
+    /**
+     * Google Calendar API v3 — the upgrade over the iCal feed.
+     *
+     * Worth it mainly because `singleEvents=true` makes GOOGLE expand the
+     * recurrences. Our own expander had seven defects in it (D10), every one of
+     * which spoke a wrong appointment aloud; Google's handles BYSETPOS,
+     * BYMONTHDAY, RDATE and real TZID conversion, which ours does not.
+     *
+     * `label=calendarId` pairs. The id is an email-shaped string — a user's own
+     * calendar is their Gmail address, and "primary" works ONLY with a
+     * credential that has a user identity (never an API key).
+     */
+    googleCalendarIds: parsePairs(process.env["GOOGLE_CALENDAR_IDS"]).pairs,
+    googleCalendarIdsDropped: parsePairs(process.env["GOOGLE_CALENDAR_IDS"]).dropped,
+
+    /**
+     * ⚠ AN API KEY READS PUBLIC CALENDARS AND NOTHING ELSE.
+     *
+     * A key answers "which project is calling"; it carries no user identity and
+     * therefore no OAuth scope. Google's discovery document lists a required
+     * scope on every write method (events.insert/update/patch/delete), and
+     * there is no public-write scope the way there is a
+     * `calendar.events.public.readonly` for reads. So with a key alone:
+     *
+     *   read a PUBLIC calendar ....... yes
+     *   read a PRIVATE calendar ...... no
+     *   write anything ............... no
+     *
+     * Use it for public data — a holidays calendar — and nothing more.
+     */
+    googleCalendarApiKey: process.env["GOOGLE_CALENDAR_API_KEY"]?.trim() || null,
+
+    /**
+     * A service account, as either inline JSON or a path to the file Google
+     * Cloud downloads. THE credential for a private diary and for writing.
+     *
+     * The setup a caregiver can actually complete: create the service account,
+     * then in Google Calendar use "Share with specific people" and paste its
+     * `client_email` exactly as they would share with a person. No consent
+     * screen, no refresh-token lifecycle, and it works on a consumer Gmail
+     * calendar — not only Workspace.
+     *
+     * Sharing as "Make changes to events" is what enables add_appointment;
+     * "See all event details" keeps it read-only.
+     */
+    googleServiceAccountJson: process.env["GOOGLE_SERVICE_ACCOUNT_JSON"]?.trim() || null,
+
+    /**
+     * Which calendar `add_appointment` writes to, by label. A write target is
+     * always explicit: with two calendars configured and no target named, the
+     * write tool is not registered at all rather than guessing which diary a
+     * hospital appointment belongs in.
+     */
+    calendarWriteTarget: process.env["CALENDAR_WRITE_TARGET"]?.trim() || null,
+
+    /**
+     * Emergency contacts, alerted when the user asks for help.
+     *
+     * `Name=email` pairs, comma-separated; the name is optional and is derived
+     * from the address when absent. THE NAME IS SPOKEN — "I'm telling Harsh and
+     * Aman" — because naming a person the user knows is the reassurance that
+     * actually helps, where "I have called for help" is vague and frightening.
+     *
+     * ⚠ Unset means the alarm path is INERT: neither the local matcher nor the
+     * `raise_alarm` tool is wired up. That is deliberate — a companion that
+     * recognises "help" and has nowhere to send it would say help is coming
+     * when nothing is. The server warns loudly at boot, because this is the one
+     * capability whose absence should be noisy.
+     */
+    emergencyContacts: process.env["EMERGENCY_CONTACTS"]?.trim() || null,
+    /** How long a repeated cry for help folds into the alert already sent. */
+    emergencyCooldownMs: num("EMERGENCY_COOLDOWN_MS", 120_000),
+
+    /**
+     * How the alert leaves the building: `smtp`, or one of the HTTP APIs.
+     *
+     * WEB API IS PREFERRED FOR THIS PATH, and not as a matter of taste. SMTP is
+     * a dozen round trips (EHLO, STARTTLS, EHLO, AUTH, MAIL, RCPT per contact,
+     * DATA, body, terminator) where the API is one — on a bad mobile link that
+     * is seconds against tens of seconds. And 465/587 are blocked outbound on
+     * many campus and hostel networks, while 443 is not blocked anywhere the
+     * device could reach Sarvam from in the first place.
+     *
+     * SMTP is NOT deprecated: it is the only way to point at a relay inside
+     * India, which the residency thread in docs/05 Q14 cares about, and the
+     * only one that works with no third party at all.
+     */
+    mailTransport: (opt("MAIL_TRANSPORT", "smtp") as "smtp" | "sendgrid" | "resend" | "brevo"),
+    /**
+     * For any transport other than `smtp`.
+     *
+     * `SENDGRID_API_KEY` is accepted as an alias because that is the name in
+     * SendGrid's own quickstart, and it is what anyone following their docs
+     * will already have exported.
+     */
+    mailApiKey:
+      process.env["MAIL_API_KEY"]?.trim() ||
+      process.env["SENDGRID_API_KEY"]?.trim() ||
+      null,
+    /**
+     * Sender address for the HTTP transports, `a@b.c` or `Name <a@b.c>`.
+     * Falls back to SMTP_FROM so switching transports needs one variable.
+     *
+     * ⚠ It must be an address you have VERIFIED with the provider. All three
+     * refuse to send from a domain you have not proved you control, and the
+     * rejection reads like an auth error.
+     */
+    mailFrom:
+      process.env["MAIL_FROM"]?.trim() ||
+      process.env["SMTP_FROM"]?.trim() ||
+      process.env["SMTP_USER"]?.trim() ||
+      null,
+
+    /**
+     * SMTP, for the alert. No API key and no vendor: any relay works, so a
+     * deployment can point at one inside India and keep the hop domestic.
+     *
+     * `SMTP_SECURITY` is `tls` (implicit, port 465), `starttls` (587) or `none`
+     * (a relay on localhost). Gmail wants an APP PASSWORD, not the account
+     * password — an ordinary password fails with a 535 that says nothing useful.
+     */
+    smtpHost: process.env["SMTP_HOST"]?.trim() || null,
+    smtpPort: num("SMTP_PORT", 465),
+    smtpSecurity: (opt("SMTP_SECURITY", "tls") as "tls" | "starttls" | "none"),
+    smtpUser: process.env["SMTP_USER"]?.trim() || null,
+    smtpPass: process.env["SMTP_PASS"] || null,
+    /** Envelope sender. Defaults to SMTP_USER, which is what most relays require. */
+    smtpFrom: process.env["SMTP_FROM"]?.trim() || process.env["SMTP_USER"]?.trim() || null,
+
     port: num("PORT", 8080),
     logLevel: opt("LOG_LEVEL", "info"),
   };
+}
+
+/**
+ * `a=1,b=2` → `{a:"1", b:"2"}`, plus whatever could not be read as a pair.
+ *
+ * Split on the FIRST `=` only, because a URL query string contains more of them
+ * and splitting on all would truncate every feed at its first parameter. `&` is
+ * untouched, so `?hl=en-IN&gl=IN` survives.
+ *
+ * `,` is the one character a value cannot contain. `?ids=1,2,3` splits into a
+ * still-valid `?ids=1` plus two orphan segments — which is why the orphans are
+ * RETURNED rather than skipped. They are the only evidence that truncation
+ * happened: the surviving half parses as a URL and looks entirely healthy.
+ * Percent-encode a literal comma as %2C.
+ */
+function parsePairs(raw: string | undefined): {
+  pairs: Record<string, string>;
+  dropped: string[];
+} {
+  const pairs: Record<string, string> = {};
+  const dropped: string[] = [];
+  if (!raw || raw.trim() === "") return { pairs, dropped };
+
+  for (const segment of raw.split(",")) {
+    if (segment.trim() === "") continue;
+    const eq = segment.indexOf("=");
+    if (eq <= 0) {
+      dropped.push(segment.trim());
+      continue;
+    }
+    const key = segment.slice(0, eq).trim();
+    const value = segment.slice(eq + 1).trim();
+    if (key !== "" && value !== "") pairs[key] = value;
+    else dropped.push(segment.trim());
+  }
+  return { pairs, dropped };
 }

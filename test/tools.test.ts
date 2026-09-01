@@ -9,12 +9,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { FALLBACKS, FILLERS, pendingCopyReview, resolveFallback, resolveFiller } from "../src/copy/fillers.ts";
+import { FALLBACKS, FILLERS, PROGRESS, pendingCopyReview, resolveFallback, resolveFiller, resolveProgress } from "../src/copy/fillers.ts";
 import { SPEAKABLE, isSpeakable } from "../src/domain/languages.ts";
 import type { JsonContext } from "../src/domain/types.ts";
 import { ToolExecutor } from "../src/tools/executor.ts";
 import { ToolRegistry, validateArgs } from "../src/tools/registry.ts";
 import type { PendingCall } from "../src/tools/types.ts";
+import { fakeHost } from "./helpers.ts";
 
 const ctxWith = (entitlements: JsonContext["entitlements"]): JsonContext => ({
   uid: "u1",
@@ -42,6 +43,7 @@ function executor(reg: ToolRegistry, over: Partial<ConstructorParameters<typeof 
     uid: "u1",
     sid: "s1",
     speakFiller: (lang) => spoken.push(lang),
+    host: fakeHost(),
     setPending: async (c) => void pendingWrites.push(c),
     clearPending: async (id) => void cleared.push(id),
     ...over,
@@ -126,6 +128,40 @@ describe("argument validation", () => {
     });
     assert.equal(validateArgs(reg.get("set_mode")!, { mode: "c" }).ok, false);
     assert.equal(validateArgs(reg.get("set_mode")!, { mode: "a" }).ok, true);
+  });
+});
+
+describe("a tool with no parameters tolerates junk arguments", () => {
+  /**
+   * Measured against a live key, 2026-08-30: sarvam-105b sends a junk argument
+   * object for no-argument tools on roughly 40% of calls (2 of 5 goodbyes, and
+   * both live sessions). The captured shape is `{"{}": "{}"}` — assembled from
+   * the fragments `{`, `"{}": `, `"{}`, `"`, `}`, so the model generated it and
+   * the parser reconstructed it faithfully.
+   *
+   * Rejecting it burned a round trip on nearly every conversation close, against
+   * the rate limit that is this system's concurrency ceiling.
+   */
+  const noParams = new ToolRegistry().register({
+    name: "hang_up",
+    description: "d",
+    parameters: { type: "object", properties: {}, required: [] },
+    handler: async () => ({ done: true }),
+  });
+
+  it("accepts the exact object the model was observed sending", () => {
+    assert.equal(validateArgs(noParams.get("hang_up")!, { "{}": "{}" }).ok, true);
+  });
+
+  it("still accepts the empty object it should have sent", () => {
+    assert.equal(validateArgs(noParams.get("hang_up")!, {}).ok, true);
+  });
+
+  it("does NOT loosen a tool that declares parameters", () => {
+    // The leniency is scoped to tools with nothing to protect. Everywhere else a
+    // stray key is a hallucination and must still fail.
+    const withParams = registry().get("get_balance")!;
+    assert.equal(validateArgs(withParams, { account: "x", "{}": "{}" }).ok, false);
   });
 });
 
@@ -237,6 +273,44 @@ describe("spoken fillers", () => {
     await exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "ta-IN", jsonContext: null });
     assert.deepEqual(spoken, ["ta-IN"], "exactly one filler, in the right language");
   });
+
+  it("hands the tool's own progress key to the caller", async () => {
+    const slow = registry({
+      filler_threshold_ms: 20,
+      deadline_ms: 2000,
+      progress_key: "progress.weather",
+      handler: async () => { await new Promise((r) => setTimeout(r, 120)); return { ok: 1 }; },
+    });
+    const keys: Array<string | undefined> = [];
+    const { exec } = executor(slow, { speakFiller: (_l, k) => void keys.push(k) });
+    await exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "hi-IN", jsonContext: null });
+    assert.deepEqual(keys, ["progress.weather"]);
+  });
+
+  it("fires once PER CALL — which is why the round guard exists", async () => {
+    // Calls in a round now run concurrently (session.#runTools), so two slow
+    // tools reach their thresholds independently and the executor announces
+    // both. Collapsing them into one spoken line is the orchestrator's job:
+    // without it the user hears "One moment." "Let me check." back to back,
+    // which sounds like a stutter rather than patience.
+    const slow = async () => { await new Promise((r) => setTimeout(r, 120)); return { ok: 1 }; };
+    const reg = registry({ filler_threshold_ms: 20, deadline_ms: 2000, handler: slow })
+      .register({
+        name: "other_tool",
+        description: "second slow tool",
+        parameters: { type: "object", properties: {}, required: [] },
+        filler_threshold_ms: 20,
+        deadline_ms: 2000,
+        handler: slow,
+      });
+    const { exec, spoken } = executor(reg);
+
+    await Promise.all([
+      exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "hi-IN", jsonContext: null }),
+      exec.execute({ call_id: "c2", name: "other_tool", args: {} }, { language: "hi-IN", jsonContext: null }),
+    ]);
+    assert.equal(spoken.length, 2, "executor announces per call; the session dedupes per round");
+  });
 });
 
 describe("context invalidation", () => {
@@ -305,5 +379,29 @@ describe("filler and fallback copy", () => {
     assert.ok(!langs.has("en-IN"));
     assert.ok(!langs.has("hi-IN"));
     assert.ok(langs.size > 0, "the remaining nine are placeholders and must be flagged");
+  });
+
+  it("covers every speakable language with progress copy too", () => {
+    for (const lang of SPEAKABLE) {
+      for (const key of Object.keys(PROGRESS)) {
+        assert.ok(
+          PROGRESS[key as keyof typeof PROGRESS][lang.code],
+          `no ${key} for ${lang.code}`,
+        );
+      }
+    }
+  });
+
+  it("flags placeholder progress copy for review as well", () => {
+    // The scope string is the key, so a reviewer can see WHICH lines are drafts
+    // rather than just how many.
+    const scopes = new Set(pendingCopyReview().map((p) => p.scope));
+    assert.ok(scopes.has("progress.weather"), "draft progress copy must be reported at boot");
+  });
+
+  it("rotates progress lines and falls back for an unknown language", () => {
+    const seen = new Set([0, 1].map((i) => resolveProgress("progress.weather", "en-IN", i)));
+    assert.ok(seen.size > 1, "asking twice in an evening should not sound identical");
+    assert.ok(resolveProgress("progress.weather", "zz-ZZ").length > 0);
   });
 });

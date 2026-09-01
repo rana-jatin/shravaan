@@ -4,3 +4,6 @@ node_modules/
 dist/
 .DS_Store
 audio-out/
+
+# Scratch scripts that have held live credentials.
+test.py

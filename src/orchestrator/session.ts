@@ -18,28 +18,49 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/env.ts";
 import { resolveCopy } from "../copy/refusals.ts";
-import { resolveFallback, resolveFiller } from "../copy/fillers.ts";
+import { resolveFallback, resolveFiller, resolveProgress } from "../copy/fillers.ts";
 import { blocksLlm, endsSession, gate1PreConnect, gate2FirstDetection, gate3Switch } from "../domain/gate.ts";
 import { ClauseChunker } from "../domain/clause-chunker.ts";
 import { EchoGuard } from "../domain/echo-guard.ts";
-import { normalizeLanguage } from "../domain/languages.ts";
+import { isSpeakable, normalizeLanguage } from "../domain/languages.ts";
 import { transition } from "../domain/turn-state.ts";
 import { TURN_WINDOW } from "../domain/redis-keys.ts";
-import { LLM_RETRY, SOCKET_RECONNECT, delayFor, withBackoff } from "../domain/backoff.ts";
+import { LLM_RETRY, withBackoff } from "../domain/backoff.ts";
 import { DEGRADATIONS, DegradationLedger, type DegradationKey } from "../domain/degradation.ts";
 import { standbyFor } from "../domain/asr-failover.ts";
-import type { GateDecision, JsonContext, LanguageCode, MemWriteEvent, MessageKey, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
+import { moodTrend } from "../domain/care-signals.ts";
+import { ASR_STABLE_MS, reopenDecision } from "../domain/asr-reopen.ts";
+import type { FactKind, GateDecision, JsonContext, LanguageCode, MemWriteEvent, MessageKey, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
+import type { LongTermStore } from "../memory/long-term-store.ts";
 import type { AsrClient } from "../providers/asr-client.ts";
-import { DeepgramAsr } from "../providers/deepgram-asr.ts";
-import { SarvamAsr } from "../providers/sarvam-asr.ts";
-import { SarvamLlm, RateLimitError, type ChatMessage, type StreamChunk } from "../providers/sarvam-llm.ts";
-import { SarvamTts } from "../providers/sarvam-tts.ts";
+import {
+  createAsr,
+  createLlm,
+  createTts,
+  type AsrFactory,
+  type AsrSpec,
+  type LlmFactory,
+  type TtsFactory,
+} from "../providers/factories.ts";
+import {
+  RateLimitError,
+  EmptyCompletionError,
+  isRetryableTransport,
+  type ChatMessage,
+  type LlmClient,
+  type StreamChunk,
+  type ToolChoice,
+} from "../providers/llm-client.ts";
+import type { TtsClient } from "../providers/tts-client.ts";
 import type { HoldingAudio } from "../audio/holding-audio.ts";
 import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
 import type { MemWriteStream } from "../memory/stream.ts";
+import { isStopRequest, matchMediaIntent } from "../copy/stop-intent.ts";
+import { EMERGENCY_ACK, EMERGENCY_FAILED, matchEmergency } from "../copy/emergency-intent.ts";
+import type { EmergencyAlerter } from "../tools/emergency.ts";
 import { ToolExecutor } from "../tools/executor.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
-import type { ToolResult } from "../tools/types.ts";
+import type { SessionToolHost, ToolResult } from "../tools/types.ts";
 
 export type DeviceLink = {
   sendAudio(pcm: Buffer): void;
@@ -60,6 +81,12 @@ export type SessionDeps = {
   localeHint?: LanguageCode | undefined;
   /** Tools this deployment offers. Entitlement-filtered per user at offer time. */
   tools?: ToolRegistry | undefined;
+  /**
+   * Long-term memory, for the two tools that read it (`recall`, `forget_this`).
+   * The turn path still never queries it on its own — see #3.9. Omit and those
+   * tools report an empty memory rather than failing.
+   */
+  longTerm?: LongTermStore | undefined;
   /** Fetches JSON context from our backend. Read-only to the agent. */
   fetchContext?: ((uid: string) => Promise<JsonContext | null>) | undefined;
   /**
@@ -67,7 +94,44 @@ export type SessionDeps = {
    * synthesised, because synthesis is what broke (slice 8).
    */
   holdingAudio?: HoldingAudio | undefined;
+  /**
+   * Emergency contacts. Omit and the alarm path is inert — both the local
+   * matcher and the `raise_alarm` tool — because a companion that recognises
+   * "help" and has nowhere to send it is worse than one that does not listen
+   * for it: it would say help is coming when nothing is.
+   */
+  alerter?: EmergencyAlerter | undefined;
   log?: (level: string, msg: string, extra?: Record<string, unknown>) => void;
+
+  /**
+   * The provider seam. Defaults to the real clients; tests pass fakes.
+   *
+   * Without these, constructing a `Session` opens live WebSockets to Sarvam, and
+   * the most intricate logic in the system — the turn loop, barge-in, the filler
+   * policy, the echo-guard lifecycle — can only be exercised by hand. See
+   * docs/07-defect-register.md §9.
+   */
+  makeAsr?: AsrFactory | undefined;
+  makeTts?: TtsFactory | undefined;
+  makeLlm?: LlmFactory | undefined;
+  /**
+   * Clock and jitter for the LLM retry path. Real time and `Math.random` by
+   * default.
+   *
+   * Injected because `LLM_RETRY` uses full jitter, so the first delay is uniform
+   * over [0, 250 ms) — and the retry filler fires only once
+   * `elapsedMs + delayMs` crosses LLM_FILLER_AFTER_MS. Against real jitter that
+   * is a coin toss, so "says one thing after 600 ms of silence" is not otherwise
+   * assertable without both waiting and flaking. `withBackoff` already takes all
+   * three (src/domain/backoff.ts); this is only a way to reach them.
+   */
+  clock?:
+    | {
+        now?: (() => number) | undefined;
+        sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
+        rand?: (() => number) | undefined;
+      }
+    | undefined;
 };
 
 /**
@@ -100,12 +164,60 @@ const MAX_LLM_TURN_FAILURES = 3;
  */
 const GOODBYE_DRAIN_MS = 4000;
 
-const SYSTEM_PROMPT = [
+/**
+ * The stable prefix. Kept byte-identical across turns so Sarvam's cached-input
+ * tier applies — see #profileBlock, which appends to it rather than editing it.
+ *
+ * THE LAST TWO LINES ARE LOAD-BEARING AND WERE ARRIVED AT BY MEASUREMENT.
+ *
+ * A tool call that streams no text leaves the user in silence until the result
+ * arrives. The model answering that itself is strictly better than our filler:
+ * it is specific to what was asked, and it is fluent in all eleven languages
+ * where nine of our own progress lines are still placeholder text.
+ *
+ * Getting it took more than asking politely. Measured, preamble rate over runs
+ * that actually called a tool:
+ *
+ *   no instruction at all                        0/9
+ *   polite instruction, mid-prompt               0/3
+ *   forceful imperative alone                    1/3
+ *   few-shot priming messages alone              0/3
+ *   few-shot priming + forceful imperative       6/8
+ *   forceful imperative + inline example         7/9   ← this
+ *
+ * Two findings worth keeping. Describing the behaviour does almost nothing;
+ * describing it forcefully AND showing it works. And the example does not need
+ * to be a real priming message — an inline one performs the same and avoids
+ * putting an invented exchange into the conversation history, where the model
+ * could later refer back to a day that never happened.
+ *
+ * At ~78% this is an improvement, not a guarantee. Roughly one tool turn in four
+ * still starts in silence, which is why the filler floor in `speakFiller`
+ * remains and must not be removed on the strength of this.
+ *
+ * ⚠ EVERY FIGURE ABOVE WAS MEASURED ON `sarvam-105b`, WHICH WE NO LONGER RUN.
+ *
+ * Re-measured twice on `sarvam-105b-conversations` with this exact prompt and
+ * the same nine asks: **2/9 — 22%**, identical across both runs. Both preambles
+ * were the Hindi asks; all five English asks called silently. The prompt is
+ * tuned to a model we replaced, and re-tuning it against this one is open work.
+ *
+ * It matters much less than the inversion suggests, because the silence it
+ * covers collapsed with it: an un-preambled tool turn is now quiet for a median
+ * of 1.05 s (0.64–1.73) against ~12.8 s before. The filler floor still stands —
+ * it is now carrying four tool turns in five rather than one in five.
+ */
+export const SYSTEM_PROMPT = [
   "You are a warm, attentive companion. Keep replies short and conversational —",
   "one or two sentences unless asked for more. You are being spoken aloud, so",
   "avoid lists, markdown, and anything that only works on a page.",
   "Reply in the same language the user is speaking. If they mix languages,",
   "mix them back naturally.",
+  "IMPORTANT: never call a tool silently. Before every tool call you must first",
+  "write one short spoken sentence telling the user what you are about to do,",
+  "then make the call. For example, asked what day it is, you would say",
+  '"Let me have a look." and call get_time in the same turn — the sentence',
+  "first, then the call.",
 ].join(" ");
 
 export class Session {
@@ -118,8 +230,8 @@ export class Session {
   /** Warmed from the store at session open; the only long-term memory on the turn path. */
   #profile: Profile | null = null;
   #asr: AsrClient | null = null;
-  #tts: SarvamTts | null = null;
-  readonly #llm: SarvamLlm;
+  #tts: TtsClient | null = null;
+  readonly #llm: LlmClient;
   readonly #chunker = new ClauseChunker();
   readonly #echo: EchoGuard;
   readonly #store: SessionStore;
@@ -128,9 +240,29 @@ export class Session {
   /** Read-only backend data. NOT memory — see docs/01-architecture.md section 1. */
   #jsonContext: JsonContext | null = null;
   #fillerIndex = 0;
+  /**
+   * Has anything already been said in the current tool round — either by the
+   * model preambling its own call, or by a filler that has already fired?
+   * Reset per round; see `speakFiller` in the constructor.
+   */
+  #roundSpoke = false;
   #turnAbort: AbortController | null = null;
   #firstDetectionDone = false;
   #closed = false;
+  /**
+   * What is playing on the device, if anything. Not a TurnPhase yet — see the
+   * note in #onFinal. A formal `media_playing` phase belongs in turn-state.ts,
+   * but that file is shared and this lands first as a session-local flag.
+   */
+  #media: { title: string; startedAt: number; volume: number } | null = null;
+  /** Live TTS pace, adjustable mid-conversation by the `set_speaking_pace` tool. */
+  #pace: number;
+  /**
+   * `end_conversation` fired. Honoured after the reply drains, never mid-word —
+   * the farewell is the last thing the user hears and cutting it is the failure
+   * the whole goodbye path exists to avoid.
+   */
+  #endRequested: string | null = null;
 
   // --- slice 8 ---------------------------------------------------------------
   /** What is currently broken. Mirrored into state.degraded. */
@@ -147,19 +279,45 @@ export class Session {
   constructor(deps: SessionDeps) {
     this.#d = deps;
     this.sid = deps.sid ?? randomUUID();
-    this.#llm = new SarvamLlm(deps.cfg);
+    this.#llm = (deps.makeLlm ?? createLlm)(deps.cfg);
     this.#echo = new EchoGuard(deps.cfg.echoGuard);
     this.#store = deps.store ?? new NullSessionStore();
     this.#tools = deps.tools ?? null;
+    this.#pace = deps.cfg.ttsPace;
     this.#executor = this.#tools
       ? new ToolExecutor({
           registry: this.#tools,
           uid: deps.uid,
           sid: this.sid,
-          speakFiller: (lang) => {
+          host: this.#host(),
+          speakFiller: (lang, progressKey) => {
+            // ONE progress line per round, and none at all if something has
+            // already been said in it.
+            //
+            // The round guard is the load-bearing half. Calls run concurrently
+            // now (#runTools), so two slow tools reach their thresholds
+            // independently and would speak two fillers back to back — "One
+            // moment." "Let me check." — which sounds like a stutter rather
+            // than patience.
+            //
+            // The already-spoke half carries most of the traffic. Under the
+            // current prompt the model announces its own call about 78% of the
+            // time (see SYSTEM_PROMPT), and that line is better than ours —
+            // specific to the question, and fluent in the nine languages where
+            // our progress copy is still placeholder. Following it with "one
+            // moment" would be padding, so we stay quiet and let it stand.
+            //
+            // The remaining ~22% is why this is a floor and not a fallback.
+            if (this.#roundSpoke) return;
+            this.#roundSpoke = true;
+
             // Fillers rotate so a companion that waits often does not sound
-            // like a loop.
-            this.#emitToTts(resolveFiller(lang, this.#fillerIndex++));
+            // like a loop. The tool's own line is used when it has one.
+            this.#emitToTts(
+              progressKey
+                ? resolveProgress(progressKey, lang, this.#fillerIndex++)
+                : resolveFiller(lang, this.#fillerIndex++),
+            );
             this.#tts?.flush();
           },
           invalidateContext: async () => {
@@ -215,6 +373,181 @@ export class Session {
   }
   get phase(): TurnPhase {
     return this.#phase;
+  }
+
+  /**
+   * The session as a tool sees it — see SessionToolHost.
+   *
+   * Built once and handed to the executor. Every method is bound to this
+   * session, so a tool cannot reach across to another conversation, and the
+   * surface is narrow enough to read in one sitting: no socket, no ledger, no
+   * turn window beyond the last reply.
+   */
+  #host(): SessionToolHost {
+    return {
+      lastAgentReply: () => {
+        // #turns is newest-first, and the user's turn is recorded before the
+        // reply is composed — so the most recent agent entry is the one before
+        // the question currently being answered.
+        const last = this.#turns.find((t) => t.role === "agent" && t.text.trim() !== "");
+        return last?.text ?? null;
+      },
+
+      requestLanguage: (raw: string) => {
+        const code = normalizeLanguage(raw);
+        if (!code) {
+          return { switched: false, language: this.#state.language, reason: "unknown_language" as const };
+        }
+        if (code === this.#state.language) {
+          return { switched: false, language: code, reason: "already_speaking_it" as const };
+        }
+        if (!isSpeakable(code)) {
+          // Same answer gate 3 gives, in the same reviewed words. A tool must
+          // not become a second, sloppier way to refuse a language.
+          if (!this.#state.switch_declined_acknowledged) {
+            this.#state.switch_declined_acknowledged = true;
+            this.#speak(resolveCopy("gate.switch_declined", this.#state.language).text);
+          }
+          this.#log("info", "language switch declined via tool", { requested: code });
+          return { switched: false, language: this.#state.language, reason: "not_speakable" as const };
+        }
+        this.#setLanguage(code, "user_stated");
+        return { switched: true, language: code };
+      },
+
+      pace: () => this.#pace,
+      setPace: (next: number) => {
+        // Bulbul's own range is undocumented; these bounds are about
+        // intelligibility rather than the API. Below 0.6 the voice drags enough
+        // to sound broken, above 1.4 it stops being restful, which is the point
+        // of the product.
+        const clamped = Math.min(1.4, Math.max(0.6, Math.round(next * 100) / 100));
+        this.#pace = clamped;
+        this.#tts?.reconfigure({ pace: clamped });
+        this.#log("info", "speaking pace changed", { pace: clamped });
+        return clamped;
+      },
+
+      requestEnd: (reason: string) => {
+        this.#endRequested = reason;
+      },
+
+      rememberFact: (text: string, kind: FactKind) => {
+        this.#emitMemWrite({
+          kind: "explicit_recall",
+          tid: this.#state.turn_no,
+          user_text: text,
+          language: this.#state.language,
+          hints: { stated_preference: true, emotional_salience: "high" },
+        });
+        this.#log("info", "explicit memory write", { kind, chars: text.length });
+      },
+
+      forgetFacts: async (subject: string) => {
+        const store = this.#d.longTerm;
+        if (!store) return { forgotten: 0, texts: [] };
+
+        const hits = await store.search(this.#d.uid, subject, 5);
+        // Only what clearly matches. A vague "forget about my sister" must not
+        // quietly take out five neighbouring facts — over-forgetting is
+        // unrecoverable in a way that under-forgetting is not, and the user can
+        // always ask again more precisely.
+        const strong = hits.filter((h) => h.score >= 0.5);
+        for (const h of strong) await store.softDelete(h.fact.id, "user_requested");
+        this.#log("info", "facts forgotten at user request", {
+          matched: hits.length,
+          forgotten: strong.length,
+        });
+        return { forgotten: strong.length, texts: strong.map((h) => h.fact.text) };
+      },
+
+      recallFacts: async (query: string, limit: number) => {
+        const store = this.#d.longTerm;
+        if (!store) return [];
+        const hits = await store.search(this.#d.uid, query, limit);
+        return hits.map((h) => ({ text: h.fact.text, score: Math.round(h.score * 100) / 100 }));
+      },
+
+      recentMood: async (sessions: number) => {
+        const store = this.#d.longTerm;
+        if (!store) return null;
+        // Episodes we already hold. The analysis that produced these ran in the
+        // memory worker hours ago; nothing on this turn leaves the process.
+        const episodes = await store.listEpisodes(this.#d.uid, sessions);
+        return moodTrend(episodes);
+      },
+
+      timezone: () =>
+        this.#jsonContext?.identity.timezone ?? this.#d.cfg.defaultTimezone,
+
+      playMedia: (req) => {
+        // Replaces whatever was playing. Two stations at once is the one
+        // outcome nobody could recover from by talking.
+        if (this.#media) this.#stopMedia("replaced");
+        this.#media = { title: req.title, startedAt: Date.now(), volume: this.#d.cfg.musicVolume };
+        // Volume travels with the request: there is no ducking, so the ONE
+        // chance to make the microphone's job possible is at start.
+        this.#d.device.sendControl({
+          type: "play_media",
+          volume: this.#media.volume,
+          ...req,
+        });
+        this.#log("info", "media started", { source: req.source, title: req.title });
+      },
+
+      stopMedia: (reason: string) => this.#stopMedia(reason),
+    };
+  }
+
+  /**
+   * Stop media and tell the device. Idempotent — `end_conversation`, a barge-in
+   * and an explicit "stop" can all arrive for the same track.
+   */
+  #stopMedia(reason: string): void {
+    if (!this.#media) return;
+    const { title, startedAt } = this.#media;
+    this.#media = null;
+    this.#d.device.sendControl({ type: "stop_media" });
+    this.#log("info", "media stopped", { title, reason, played_ms: Date.now() - startedAt });
+  }
+
+  /**
+   * Louder or quieter, in steps.
+   *
+   * Steps rather than a number for the same reason `set_speaking_pace` uses
+   * them: "sixty percent" is not a thing anyone says out loud. Clamped, and the
+   * floor is deliberately above zero — silent-but-playing is indistinguishable
+   * from broken to someone listening, and they would have said "stop" if they
+   * meant stop.
+   */
+  #adjustMediaVolume(direction: "quieter" | "louder"): void {
+    if (!this.#media) return;
+    const before = this.#media.volume;
+    const next = Math.max(15, Math.min(100, before + (direction === "louder" ? 20 : -20)));
+    this.#media.volume = next;
+    this.#d.device.sendControl({ type: "set_media_volume", volume: next });
+    this.#log("info", "media volume", { direction, before, after: next, at_limit: next === before });
+  }
+
+  /** True while a station or track is playing on the device. */
+  get mediaPlaying(): boolean {
+    return this.#media !== null;
+  }
+
+  /**
+   * The device reports playback finished on its own — the stream ended, dropped,
+   * or every fallback URL failed.
+   *
+   * WITHOUT THIS THE SESSION GOES DEAF. `#onFinal` returns early while `#media`
+   * is set, so a track that ends without telling us leaves the flag stuck and
+   * every later transcript is swallowed. The user talks and nothing happens,
+   * indefinitely, and the only escape is guessing that "stop" still works.
+   */
+  mediaEnded(): void {
+    if (!this.#media) return;
+    const { title, startedAt } = this.#media;
+    this.#media = null;
+    this.#log("info", "media ended on device", { title, played_ms: Date.now() - startedAt });
   }
 
   #resolveSeed() {
@@ -340,24 +673,36 @@ export class Session {
   }
 
   #openAsr(provider: "sarvam" | "deepgram" = "sarvam"): void {
-    const asr: AsrClient =
+    const spec: AsrSpec =
       provider === "deepgram"
-        ? new DeepgramAsr(this.#d.cfg, {
-            // Flux wants a bare primary subtag. Only reached for hi-IN / en-IN.
-            languageHint: this.#state.language.split("-")[0]!,
-          })
-        : // Auto-detect on the first turn so the user's actual language wins over
-          // the seed. The token itself is unresolved in Sarvam's docs (docs/05 Q1).
-          new SarvamAsr(this.#d.cfg, {
-            languageCode: this.#d.cfg.asrAutodetectToken,
-            mode: "codemix",
-            returnTimestamps: true,
-          });
+        ? {
+            provider,
+            opts: {
+              // Flux wants a bare primary subtag. Only reached for hi-IN / en-IN.
+              languageHint: this.#state.language.split("-")[0]!,
+            },
+          }
+        : {
+            provider,
+            // Auto-detect on the first turn so the user's actual language wins
+            // over the seed. The token itself is unresolved in Sarvam's docs
+            // (docs/05 Q1).
+            opts: {
+              languageCode: this.#d.cfg.asrAutodetectToken,
+              mode: "codemix",
+              returnTimestamps: true,
+            },
+          };
 
+    const asr = (this.#d.makeAsr ?? createAsr)(this.#d.cfg, spec);
+
+    // Opening proves nothing. Sarvam accepts the upgrade and only then rejects a
+    // bad parameter, so a doomed socket fires `open` exactly like a healthy one.
+    // Resetting the failure count here made both thresholds in #onAsrDown
+    // unreachable — see src/domain/asr-reopen.ts for what that cost.
+    let openedAt: number | null = null;
     asr.on("open", () => {
-      // A clean open resets the failure count. Otherwise four failures spread
-      // across an hour of healthy conversation eventually mute the session.
-      this.#asrReopens = 0;
+      openedAt = Date.now();
     });
     asr.on("speech_start", () => this.#onSpeechStart());
     asr.on("partial", (t) => this.#onPartial(t.text));
@@ -365,8 +710,13 @@ export class Session {
     asr.on("error", (e) => this.#log("error", "asr", { provider, err: e.message }));
     asr.on("close", ({ code }) => {
       if (this.#closed || this.#terminating) return;
-      this.#log("warn", "asr closed", { provider, code });
-      this.#onAsrDown(`socket closed with ${code}`);
+      // Whether this socket ever worked is decided here, while we still know how
+      // long it lived. A connection that carried a conversation for a while and
+      // then dropped is a new incident; one rejected on connect is the same
+      // incident continuing.
+      const stable = openedAt !== null && Date.now() - openedAt >= ASR_STABLE_MS;
+      this.#log("warn", "asr closed", { provider, code, stable });
+      this.#onAsrDown(`socket closed with ${code}`, stable);
     });
 
     asr.connect();
@@ -375,7 +725,7 @@ export class Session {
   }
 
   #openTts(language: LanguageCode): void {
-    const tts = new SarvamTts(this.#d.cfg, {
+    const tts = (this.#d.makeTts ?? createTts)(this.#d.cfg, {
       languageCode: language,
       speaker: this.#d.cfg.ttsSpeaker,
       pace: this.#d.cfg.ttsPace,
@@ -436,10 +786,9 @@ export class Session {
    * compliance decision made by a network blip. We reconnect first, and only
    * relocate if Sarvam genuinely will not come back.
    */
-  #onAsrDown(reason: string): void {
+  #onAsrDown(reason: string, socketWasStable = false): void {
     if (this.#closed || this.#terminating || this.#asrReopenTimer) return;
 
-    this.#asrReopens += 1;
     this.#asr?.close();
     this.#asr = null;
 
@@ -448,7 +797,18 @@ export class Session {
       current: this.#state.asr_provider,
     });
 
-    if (standby.available && this.#asrReopens >= 2) {
+    const decision = reopenDecision({
+      reopens: this.#asrReopens,
+      socketWasStable,
+      standbyAvailable: standby.available,
+      maxReopens: MAX_ASR_REOPENS,
+      // The reopen delay is a real timer, so its jitter is the one thing that
+      // decides how long a test of the failover ladder actually takes.
+      ...(this.#d.clock?.rand ? { rand: this.#d.clock.rand } : {}),
+    });
+    this.#asrReopens = decision.reopens;
+
+    if (decision.action === "failover") {
       this.#degrade("asr_failover_active", {
         from: reason,
         language: this.#state.language,
@@ -458,14 +818,14 @@ export class Session {
       return;
     }
 
-    if (this.#asrReopens > MAX_ASR_REOPENS) {
+    if (decision.action === "lose_hearing") {
       this.#loseHearing(
         standby.available ? reason : `${reason} (no standby: ${standby.detail})`,
       );
       return;
     }
 
-    const delayMs = delayFor(this.#asrReopens - 1, SOCKET_RECONNECT);
+    const delayMs = decision.delayMs;
     this.#log("warn", "reopening asr", {
       attempt: this.#asrReopens,
       delayMs,
@@ -615,6 +975,61 @@ export class Session {
     // A session on its way out still receives whatever the ASR had buffered.
     // Answering it would talk over our own goodbye.
     if (this.#closed || this.#terminating || text.trim() === "") return;
+
+    // ⚠ FIRST. BEFORE EVERYTHING.
+    //
+    // Before the media short-circuit, before the language gate, before the
+    // turn lock, before any request that can be rate-limited. Someone calling
+    // for help must not be beaten to it by a gate that decided their language
+    // was unsupported, or by a radio station playing over them, or by a lock
+    // held by the turn they interrupted.
+    //
+    // This is the one path in the product where slow and wrong are the same
+    // outcome. See src/copy/emergency-intent.ts for why it is a table rather
+    // than a model call.
+    if (this.#d.alerter) {
+      const alarm = matchEmergency(text, this.#state.language);
+      if (alarm) {
+        await this.#raiseAlarm(text, alarm.kind, alarm.matched);
+        return;
+      }
+    }
+
+    // WHILE MEDIA PLAYS, two things are true at once and they pull opposite ways.
+    //
+    // "Stop" must be deterministic. It is matched locally, with no LLM round
+    // trip, because an elderly user shouting at a device that will not stop is
+    // the worst moment this product can produce — worse than any wrong answer,
+    // because it is loud and they cannot escape it. That short-circuit is not
+    // negotiable and runs first.
+    //
+    // But the rest of what they say must still REACH the companion. The first
+    // version of this dropped every non-stop transcript, on the theory that the
+    // ASR would otherwise transcribe the song's own lyrics and the model would
+    // answer them. It does do that — but the cure was worse: asking for the
+    // weather while the radio played got silence, and a companion that stops
+    // listening the moment it starts entertaining you is not a companion.
+    //
+    // So lyrics reaching the model is now an accepted cost, bounded by
+    // `restrictListeningDuringMedia` for a deployment that finds it intolerable.
+    // The real fix is ducking the music on speech_start, which needs the device
+    // side and does not exist yet.
+    if (this.#media) {
+      const intent = matchMediaIntent(text, this.#state.language);
+      if (intent === "stop") {
+        this.#stopMedia("user_asked");
+        return;
+      }
+      if (intent === "quieter" || intent === "louder") {
+        this.#adjustMediaVolume(intent);
+        return;
+      }
+    }
+    if (this.#media && this.#d.cfg.restrictListeningDuringMedia) {
+      this.#log("info", "ignored while media playing", { text: text.slice(0, 60) });
+      return;
+    }
+
     this.#apply({ type: "speech_end", text });
 
     const decision = this.#runLanguageGate(detected, confidence);
@@ -841,6 +1256,18 @@ export class Session {
     let reply = "";
     let spokeAnything = false;
     let failure: unknown = null;
+    /** Whether any tool round ran — a turn that acted is not a silent turn. */
+    let ranAnyTool = false;
+    /**
+     * Failed calls from the most recent round, held rather than spoken.
+     *
+     * The old code spoke the localised fallback the instant a tool failed AND
+     * fed the error back to the model, so the user heard our apology and then
+     * the model's apology for the same failure. The error still goes back — the
+     * model needs it to answer honestly — and this is the safety net for the
+     * case where it then says nothing at all.
+     */
+    let unanswered: ToolResult[] = [];
 
     const speak = (text: string) => {
       for (const chunk of this.#chunker.push(text)) {
@@ -859,13 +1286,17 @@ export class Session {
         const calls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
         let roundText = "";
 
-        const offered =
-          this.#tools && round < MAX_TOOL_ROUNDS
-            ? this.#tools.schemasFor(this.#jsonContext)
-            : [];
+        const offered = this.#tools ? this.#tools.schemasFor(this.#jsonContext) : [];
+
+        // The last round must produce prose. `tool_choice: "none"` says exactly
+        // that — verified honoured on sarvam-105b — and it is better than the
+        // alternative of withdrawing the tool list, which changes the prompt
+        // prefix mid-turn and invites the model to explain that it has lost
+        // capabilities it appeared to have a moment ago.
+        const toolChoice: ToolChoice = round < MAX_TOOL_ROUNDS ? "auto" : "none";
 
         // Retries live inside here and stop at the first chunk — see the method.
-        const it = this.#llmStream(messages, offered, abort.signal, !spokeAnything);
+        const it = this.#llmStream(messages, offered, toolChoice, abort.signal, !spokeAnything);
 
         for (let res = await it.next(); !res.done; res = await it.next()) {
           if (abort.signal.aborted) break;
@@ -885,9 +1316,28 @@ export class Session {
         if (abort.signal.aborted || calls.length === 0) break;
 
         this.#apply({ type: "tool_dispatched" });
+        // A turn that acted is not a silent turn, even if it never spoke. See
+        // `saidNothing` at the end of this method.
+        ranAnyTool = true;
+
+        // Anything the model said before calling counts as having spoken for
+        // this round — usually it has, since the prompt asks for it explicitly
+        // and gets it about 78% of the time. The filler covers the rest.
+        this.#roundSpoke = roundText.trim() !== "";
+
         const results = await this.#runTools(calls, abort.signal);
         this.#apply({ type: "tool_result" });
+        unanswered = results.filter((r) => !r.ok);
         if (abort.signal.aborted) break;
+
+        // Once per round, not once per call. A mutating tool invalidates the
+        // cached JSON context, and the refetch is a full backend round trip
+        // sitting inside a turn that is already over its latency budget —
+        // paying for it twice because the model called two mutating tools is
+        // pure waste.
+        if (results.some((r) => r.ok && r.context_mutated)) {
+          this.#jsonContext = await this.#fetchContext();
+        }
 
         messages.push({
           role: "assistant",
@@ -913,6 +1363,19 @@ export class Session {
           if (!spokeAnything) this.#apply({ type: "first_clause_ready" });
           this.#emitToTts(tail);
         }
+
+        // The model was handed the tool error and still said nothing. The user
+        // asked for something and is owed an answer either way, so the reviewed
+        // per-language fallback is spoken here — the one place it cannot
+        // duplicate whatever the model chose to say.
+        if (!spokeAnything && unanswered.length > 0) {
+          const first = unanswered[0]!;
+          if (!first.ok) {
+            this.#emitToTts(resolveFallback(first.error.spoken_fallback_key, this.#state.language));
+            spokeAnything = true;
+          }
+        }
+
         this.#tts?.flush();
       }
     } catch (err) {
@@ -939,14 +1402,58 @@ export class Session {
       });
     }
 
+    /**
+     * The turn ran to completion and the user heard nothing.
+     *
+     * `EmptyCompletionError` catches the common case — a stream that yields no
+     * content at all now throws, and lands in the branch below. This catches
+     * what survives that: content that arrived but amounted to nothing once the
+     * chunker was done with it. Whitespace is the real shape, not a hypothetical
+     * — `tool_choice: "required"` was observed returning 3,037 characters of
+     * "\n  " before hitting the token cap.
+     *
+     * Without this it falls to `!failure` and is scored as a HEALTHY turn: the
+     * consecutive-failure counter resets and a recovery is filed, so a run of
+     * silent turns reads in the ledger as the LLM repeatedly getting better. A
+     * turn that says nothing is a failed turn, whatever the transport thought.
+     *
+     * Tool rounds are exempt: `unanswered` above already speaks a fallback for a
+     * failed tool, and a round that ran tools successfully and stayed quiet is
+     * the model acting rather than talking, which is legitimate.
+     */
+    const saidNothing =
+      !failure && !interrupted && !spokeAnything && reply.trim() === "" && !ranAnyTool;
+
     if (failure && !interrupted) {
       this.#onTurnFailed(failure, spokeAnything);
+      this.#apply({ type: "playback_drained" });
+    } else if (saidNothing) {
+      this.#log("warn", "turn produced no speech", {
+        turn_no: this.#state.turn_no,
+        chars_received: reply.length,
+      });
+      this.#onTurnFailed(new Error("turn completed without speaking"), false);
       this.#apply({ type: "playback_drained" });
     } else if (!failure) {
       // A turn that completed is evidence the LLM is back. Recovery is as
       // reportable as failure, or the ledger only ever grows.
       this.#llmFailures = 0;
-      this.#recover("llm_rate_limited");
+      this.#recover("llm_retrying");
+    }
+
+    // `end_conversation` fired during this turn. Honour it only now, so the
+    // farewell the model composed is spoken in full — and drop it entirely if
+    // the user interrupted, because someone who talks over a goodbye has not
+    // finished the conversation.
+    if (this.#endRequested !== null) {
+      const reason = this.#endRequested;
+      this.#endRequested = null;
+      if (interrupted) {
+        this.#log("info", "end request cancelled by barge-in", { reason });
+      } else {
+        this.#log("info", "ending at user request", { reason });
+        setTimeout(() => this.close(reason), GOODBYE_DRAIN_MS).unref?.();
+      }
     }
   }
 
@@ -967,6 +1474,7 @@ export class Session {
   async *#llmStream(
     messages: ChatMessage[],
     offered: ReturnType<ToolRegistry["schemasFor"]>,
+    toolChoice: ToolChoice,
     signal: AbortSignal,
     maySpeakFiller: boolean,
   ): AsyncGenerator<StreamChunk, void, undefined> {
@@ -976,7 +1484,11 @@ export class Session {
       async () => {
         const it = this.#llm.stream(messages, {
           signal,
-          ...(offered.length > 0 ? { tools: offered } : {}),
+          ...(offered.length > 0 ? { tools: offered, toolChoice } : {}),
+          // A divergent tool-call stream is a provider-contract problem, and the
+          // only place it is visible is here. Losing it to a silent catch is
+          // what made the `{}{}` bug expensive to find in the first place.
+          onWarn: (msg, extra) => this.#log("warn", msg, extra),
         });
         // The fetch does not happen until the first pull, so this is what
         // actually surfaces a 429 and makes it retryable.
@@ -985,14 +1497,40 @@ export class Session {
       },
       {
         policy: LLM_RETRY,
+        // Real time and Math.random unless a test says otherwise. The filler
+        // threshold below is measured against these, so they are the difference
+        // between asserting the silence policy and waiting out a coin toss.
+        now: this.#d.clock?.now,
+        sleep: this.#d.clock?.sleep,
+        rand: this.#d.clock?.rand,
         // A 500 or a malformed request will not fix itself in 250 ms, and
         // retrying it burns the same rate limit a 429 is already telling us
-        // about. Only the limit itself is worth waiting out.
-        retryable: (err) => err instanceof RateLimitError,
+        // about. So this stays narrow — but it was previously narrower than the
+        // failures that actually occur.
+        //
+        // Measured over 12 loaded calls: three empty completions, two dropped
+        // sockets, and NOT ONE 429. Keying the retry on `RateLimitError` alone
+        // meant every failure we actually saw skipped the retry entirely. The
+        // 2.5 s budget in LLM_RETRY is what keeps this honest — and because that
+        // budget counts elapsed time rather than sleep time, a slow empty
+        // completion is abandoned rather than retried into more silence.
+        retryable: (err) =>
+          err instanceof RateLimitError ||
+          err instanceof EmptyCompletionError ||
+          isRetryableTransport(err),
         signal,
-        onRetry: ({ attempt, delayMs, elapsedMs }) => {
-          this.#degrade("llm_rate_limited");
-          this.#log("warn", "llm retry", { attempt, delayMs, elapsedMs });
+        onRetry: ({ attempt, delayMs, elapsedMs, err }) => {
+          this.#degrade("llm_retrying");
+          // The cause is the whole point of the entry: "rate limited", "said
+          // nothing" and "socket died" are three different operational stories
+          // that the ledger reason alone can no longer distinguish.
+          this.#log("warn", "llm retry", {
+            attempt,
+            delayMs,
+            elapsedMs,
+            cause: err instanceof Error ? err.name : typeof err,
+            detail: err instanceof Error ? err.message : undefined,
+          });
 
           // Fill the silence only once it has become a silence. Below the
           // threshold the retry is invisible and speaking would make a fast
@@ -1023,7 +1561,7 @@ export class Session {
     this.#llmFailures += 1;
 
     if (failure instanceof RateLimitError) {
-      this.#degrade("llm_rate_limited", { consecutive: this.#llmFailures });
+      this.#degrade("llm_retrying", { consecutive: this.#llmFailures });
     } else {
       this.#log("error", "llm", {
         consecutive: this.#llmFailures,
@@ -1042,37 +1580,68 @@ export class Session {
   }
 
   /**
-   * Run a round of tool calls.
+   * Run a round of tool calls — CONCURRENTLY.
    *
-   * A failed tool is SPOKEN, not swallowed: the user asked for something and is
-   * owed an answer either way. The fallback is resolved per language so an
-   * English error string never reaches a Hindi voice.
+   * sarvam-105b returns multiple calls in one round (verified: "what time is it
+   * and what's the weather" came back as two). Running them in sequence made the
+   * user wait for the sum of the deadlines: two 8 s tools is 16 s of a live
+   * conversation, and three rounds of that outlives anyone's patience. Run
+   * together, a round costs the SLOWEST call instead of all of them.
+   *
+   * Each call still carries its own deadline and its own pending entry, so one
+   * timing out neither cancels nor delays its siblings. `allSettled` rather than
+   * `all` for the same reason — a handler that rejects outside the executor's
+   * own catch must not discard the results of calls that succeeded.
+   *
+   * Failures are returned, not spoken. See `unanswered` in #respond for why.
    */
   async #runTools(
     calls: Array<{ id: string; name: string; args: Record<string, unknown> }>,
     signal: AbortSignal,
   ): Promise<ToolResult[]> {
     if (!this.#executor) return [];
+    const executor = this.#executor;
+
+    const settled = await Promise.allSettled(
+      calls.map((c) =>
+        executor.execute(
+          { call_id: c.id, name: c.name, args: c.args },
+          { language: this.#state.language, jsonContext: this.#jsonContext, signal },
+        ),
+      ),
+    );
 
     const results: ToolResult[] = [];
-    for (const c of calls) {
-      const result = await this.#executor.execute(
-        { call_id: c.id, name: c.name, args: c.args },
-        { language: this.#state.language, jsonContext: this.#jsonContext, signal },
-      );
-      results.push(result);
+    for (const [i, outcome] of settled.entries()) {
+      const c = calls[i]!;
+      if (outcome.status === "rejected") {
+        // The executor is written to resolve on every path, so this is a bug in
+        // a handler that escaped it. Report it as a tool failure rather than
+        // letting one bad tool take down the turn.
+        const message =
+          outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+        this.#log("error", "tool executor rejected", { tool: c.name, err: message });
+        results.push({
+          call_id: c.id,
+          name: c.name,
+          ok: false,
+          elapsed_ms: 0,
+          error: { code: "upstream_error", message, spoken_fallback_key: "tool.unavailable" },
+        });
+        continue;
+      }
 
+      const result = outcome.value;
+      results.push(result);
       this.#state.last_tool = c.name;
       if (result.ok) {
         this.#log("info", "tool ok", { tool: c.name, ms: result.elapsed_ms });
-        if (result.context_mutated) this.#jsonContext = await this.#fetchContext();
       } else {
         this.#log("warn", "tool failed", {
           tool: c.name,
           code: result.error.code,
           ms: result.elapsed_ms,
         });
-        this.#emitToTts(resolveFallback(result.error.spoken_fallback_key, this.#state.language));
       }
     }
     return results;
@@ -1089,6 +1658,63 @@ export class Session {
         err: err instanceof Error ? err.message : String(err),
       });
       return null;
+    }
+  }
+
+  /**
+   * Raise the alarm, and say so.
+   *
+   * ORDER IS THE WHOLE DESIGN HERE.
+   *
+   * 1. Stop the music. The user has to be able to hear the answer, and a device
+   *    playing a film song while someone lies on the floor is its own harm.
+   * 2. SPEAK FIRST, before the email is even attempted. The send takes seconds
+   *    over a mail relay; the reassurance cannot wait for it, and the words are
+   *    what stops a frightened person shouting at the device.
+   * 3. Send.
+   * 4. If it failed, SAY SO. A companion that claims help is coming when it is
+   *    not is worse than one with no alarm at all — it stops the user trying
+   *    anything else. This is the reason the alerter returns a result instead
+   *    of being fire-and-forget.
+   *
+   * The turn is deliberately not recorded and no lock is taken: an alarm is not
+   * a conversational turn, and it must not be able to lose a race with one.
+   */
+  async #raiseAlarm(text: string, kind: string, matched: string): Promise<void> {
+    const alerter = this.#d.alerter;
+    if (!alerter) return;
+
+    this.#log("warn", "EMERGENCY detected", {
+      trigger: kind,
+      matched,
+      language: this.#state.language,
+      text: text.slice(0, 120),
+    });
+
+    if (this.#media) this.#stopMedia("emergency");
+
+    const language = this.#state.language;
+    const ack = EMERGENCY_ACK[language] ?? EMERGENCY_ACK["en-IN"]!;
+    this.#speak(ack.replace("{names}", alerter.names));
+
+    const result = await alerter.raise({
+      uid: this.#d.uid,
+      sid: this.sid,
+      language,
+      timezone: this.#jsonContext?.identity.timezone ?? this.#d.cfg.defaultTimezone,
+      spoken: text,
+      trigger: kind as "phrase" | "repeated" | "bare",
+      detail: `matched "${matched}"`,
+      // Oldest last in the window, so it reads as a conversation to whoever
+      // opens the email at three in the morning.
+      recent: this.#turns
+        .slice(0, 6)
+        .reverse()
+        .map((t) => ({ role: t.role, text: t.text })),
+    });
+
+    if (!result.sent) {
+      this.#speak(EMERGENCY_FAILED[language] ?? EMERGENCY_FAILED["en-IN"]!);
     }
   }
 
@@ -1149,6 +1775,10 @@ export class Session {
   close(reason: string): void {
     if (this.#closed) return;
     this.#closed = true;
+    // Before anything else. A session that ends while a station plays must not
+    // leave the device playing to an empty room with nothing left to stop it —
+    // the socket is about to go, and with it the only route to stop_media.
+    this.#stopMedia(`session_${reason}`);
     this.#turnAbort?.abort();
     if (this.#asrReopenTimer) clearTimeout(this.#asrReopenTimer);
     this.#asrReopenTimer = null;

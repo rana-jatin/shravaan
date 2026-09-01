@@ -7,10 +7,12 @@
  * an agent proposing something it will then have to withdraw.
  */
 
+import type { ToolSchema } from "../providers/sarvam-llm.ts";
 import type { Entitlement, JsonContext } from "../domain/types.ts";
 import {
   DEFAULT_DEADLINE_MS,
   DEFAULT_FILLER_THRESHOLD_MS,
+  type JsonSchemaProperty,
   type ToolDefinition,
 } from "./types.ts";
 
@@ -77,23 +79,50 @@ export class ToolRegistry {
   }
 
   /** OpenAI-style function schemas for the tools this user may be offered. */
-  schemasFor(ctx: JsonContext | null, now: Date = new Date()): Array<{
-    type: "function";
-    function: { name: string; description: string; parameters: unknown };
-  }> {
-    return this.offerableTo(ctx, now).map((t) => ({
-      type: "function" as const,
-      function: { name: t.name, description: t.description, parameters: t.parameters },
-    }));
+  schemasFor(ctx: JsonContext | null, now: Date = new Date()): ToolSchema[] {
+    return this.offerableTo(ctx, now).map(toSchema);
   }
 }
 
 /**
- * Shallow argument validation against the declared schema.
+ * A tool definition as the model sees it.
  *
- * Deliberately not a full JSON Schema implementation: this catches a model
- * hallucinating a field name or omitting a required one, which is the realistic
- * failure. Anything deeper belongs in the handler, which knows its own domain.
+ * `strict: true` is emitted only when the schema actually satisfies strict
+ * mode's rule — every property required, no additional properties. OpenAI
+ * rejects a strict schema with optional fields, and while Sarvam accepted
+ * `strict` in the probe it was never tested against a non-conforming schema.
+ * Claiming strictness we do not meet is how you earn a 400 on the one turn a
+ * user needed the tool, so we claim it only where it is true.
+ */
+export function toSchema(t: ToolDefinition): ToolSchema {
+  const props = Object.keys(t.parameters.properties);
+  const required = t.parameters.required ?? [];
+  const conforms =
+    t.parameters.additionalProperties === false && props.every((p) => required.includes(p));
+
+  return {
+    type: "function" as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+      ...(conforms ? { strict: true } : {}),
+    },
+  };
+}
+
+/**
+ * Argument validation against the declared schema.
+ *
+ * Still deliberately not a full JSON Schema implementation — no `$ref`, no
+ * nested objects, no composition keywords. It enforces exactly what our schemas
+ * can express, because a validator that silently ignores a constraint it claims
+ * to check is worse than one with a stated boundary.
+ *
+ * `strict` in OpenAI's sense is enforced HERE rather than trusted to the model.
+ * Sarvam accepts the `strict` flag but nothing in its documentation promises to
+ * honour it, and a companion that dispatches a malformed call because a remote
+ * flag was ignored is the kind of failure that only shows up in production.
  */
 export function validateArgs(
   tool: ToolDefinition,
@@ -105,20 +134,69 @@ export function validateArgs(
     }
   }
 
+  // A tool that declares no parameters accepts anything and reads none of it.
+  //
+  // This is not laxity, it is the cheaper of two failures. sarvam-105b emits a
+  // junk argument object for no-argument tools at a measured ~40% rate — the
+  // observed shape is `{"{}": "{}"}`, generated token by token (`{`, `"{}": `,
+  // `"{}`, `"`, `}`), so it is the model inventing an object, not our parser
+  // mangling one. Rejecting it cost a whole extra round trip on nearly every
+  // `end_conversation`, which is to say on nearly every conversation close, and
+  // spends a request against the rate limit ADR 0003 calls the system's
+  // concurrency ceiling. The handler signature is `(_args, ctx)`; there is no
+  // argument for junk to corrupt.
+  //
+  // Tools that DO declare parameters keep the strict check below — there a
+  // stray key is a real hallucination and rejecting it is what stops the model
+  // from quietly acting on something the user never asked for.
+  const declaresNoParameters = Object.keys(tool.parameters.properties).length === 0;
+
   for (const [key, value] of Object.entries(args)) {
     const spec = tool.parameters.properties[key];
-    if (!spec) return { ok: false, reason: `unknown argument "${key}"` };
-
-    const actual = Array.isArray(value) ? "array" : typeof value;
-    if (spec.type === "integer" || spec.type === "number") {
-      if (actual !== "number") return { ok: false, reason: `"${key}" must be a number` };
-    } else if (spec.type !== actual) {
-      return { ok: false, reason: `"${key}" must be ${spec.type}, got ${actual}` };
+    if (!spec) {
+      if (declaresNoParameters) continue;
+      return { ok: false, reason: `unknown argument "${key}"` };
     }
 
-    if (spec.enum && typeof value === "string" && !spec.enum.includes(value)) {
-      return { ok: false, reason: `"${key}" must be one of ${spec.enum.join(", ")}` };
-    }
+    const failure = checkValue(key, value, spec);
+    if (failure) return { ok: false, reason: failure };
   }
   return { ok: true };
+}
+
+function checkValue(key: string, value: unknown, spec: JsonSchemaProperty): string | null {
+  const actual = Array.isArray(value) ? "array" : typeof value;
+
+  switch (spec.type) {
+    case "integer":
+      // `typeof 1.5 === "number"` too, so the previous check let a float through
+      // as an integer. A tool that takes a count deserves a count.
+      if (typeof value !== "number" || !Number.isInteger(value)) {
+        return `"${key}" must be an integer, got ${JSON.stringify(value)}`;
+      }
+      break;
+    case "number":
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return `"${key}" must be a number, got ${JSON.stringify(value)}`;
+      }
+      break;
+    case "array": {
+      if (!Array.isArray(value)) return `"${key}" must be array, got ${actual}`;
+      const itemType = spec.items?.type;
+      if (itemType) {
+        for (const [i, item] of value.entries()) {
+          const bad = checkValue(`${key}[${i}]`, item, { type: itemType });
+          if (bad) return bad;
+        }
+      }
+      break;
+    }
+    default:
+      if (spec.type !== actual) return `"${key}" must be ${spec.type}, got ${actual}`;
+  }
+
+  if (spec.enum && typeof value === "string" && !spec.enum.includes(value)) {
+    return `"${key}" must be one of ${spec.enum.join(", ")}`;
+  }
+  return null;
 }

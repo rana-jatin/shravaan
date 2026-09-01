@@ -73,18 +73,27 @@ export class SarvamAsr extends EventEmitter<AsrEvents> implements AsrClient {
     ws.on("message", (raw) => this.#onMessage(raw));
     ws.on("error", (err) => this.emit("error", err instanceof Error ? err : new Error(String(err))));
     ws.on("close", (code, reason) => {
-      // 4000 is Sarvam's documented "unsupported sample rate" close. Surface it
-      // explicitly — it is otherwise a very confusing silent failure.
+      const detail = reason.toString().trim();
+      // Sarvam's guide documents 4000 as "unsupported sample rate", and the
+      // first version of this handler asserted that reading. Against a live key
+      // it produced a message that contradicted itself — "sample rate 16000 is
+      // not accepted. Only 8000 and 16000 are supported" — because the socket
+      // also closes 4000 on a rejected key, a wrong path or a bad query param,
+      // and the guide is the same unverified source as the path and header
+      // above. Report what the close frame actually said, plus the parameters
+      // that could have caused it. docs/05-open-questions.md Q12.
       if (code === 4000) {
         this.emit(
           "error",
           new Error(
-            `Sarvam closed the socket with code 4000 — sample rate ${this.#cfg.asrSampleRate} ` +
-              `is not accepted. Only 8000 and 16000 are supported.`,
+            `Sarvam closed the ASR socket with code 4000` +
+              (detail ? `: ${detail}` : ` and an empty reason`) +
+              ` — sent sample_rate=${this.#cfg.asrSampleRate}, model=${this.#cfg.asrModel}, ` +
+              `language_code=${this.#opts.languageCode}, path=${url.pathname}`,
           ),
         );
       }
-      this.emit("close", { code, reason: reason.toString() });
+      this.emit("close", { code, reason: detail });
     });
   }
 
@@ -97,7 +106,18 @@ export class SarvamAsr extends EventEmitter<AsrEvents> implements AsrClient {
       return;
     }
 
-    const type = String(msg["type"] ?? "");
+    // Sarvam keys these frames on `event`, not `type` — confirmed against a
+    // live socket, which greets us with:
+    //   {"event":"session.begin","request_id":"…","config":{…}}
+    // Reading `type` matched nothing, so every ASR frame fell through to the
+    // default branch and was dropped in silence: no transcripts, no VAD, no
+    // errors, and a connection that looks healthy throughout. `type` is kept as
+    // a fallback only because the guide claimed it and costs nothing to accept.
+    //
+    // The event NAMES below are still guide-sourced. `session.begin` is now
+    // confirmed; the vad.* and transcript.* names need audio through a live
+    // socket to verify. docs/05-open-questions.md Q12
+    const type = String(msg["event"] ?? msg["type"] ?? "");
     switch (type) {
       case "session.begin":
       case "config.updated":
@@ -125,9 +145,20 @@ export class SarvamAsr extends EventEmitter<AsrEvents> implements AsrClient {
     }
   }
 
-  /** Send a raw PCM frame. Caller supplies linear16 at the configured rate. */
+  /**
+   * Send a raw PCM frame. Caller supplies linear16 at the configured rate.
+   *
+   * BINARY, not base64 in JSON. This sent `{type:"audio_input", audio:"<b64>"}`,
+   * which Sarvam accepts without complaint and ignores completely: the socket
+   * stays open, the session looks healthy, and no VAD or transcript event ever
+   * arrives. Verified against a live socket — `audio_input`, `audio_data` and
+   * `input_audio_buffer.append` all produce the same silence, while binary
+   * frames transcribe immediately. A wrong guess here is invisible rather than
+   * loud, which is what made it expensive. docs/05-open-questions.md Q12
+   */
   sendAudio(pcm: Buffer): void {
-    this.#send({ type: "audio_input", audio: pcm.toString("base64") });
+    if (this.#ws?.readyState !== WebSocket.OPEN) return;
+    this.#ws.send(pcm, { binary: true });
   }
 
   /**

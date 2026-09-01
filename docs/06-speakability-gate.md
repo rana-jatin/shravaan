@@ -33,7 +33,7 @@ The gate's only source of truth. Everything else in this document is plumbing ar
     { "code": "ml-IN", "name": "Malayalam", "endonym": "മലയാളം" },
     { "code": "mr-IN", "name": "Marathi",   "endonym": "मराठी" },
     { "code": "pa-IN", "name": "Punjabi",   "endonym": "ਪੰਜਾਬੀ" },
-    { "code": "od-IN", "name": "Odia",      "endonym": "ଓଡ଼ିଆ" },
+    { "code": "or-IN", "name": "Odia",      "endonym": "ଓଡ଼ିଆ" },
     { "code": "en-IN", "name": "English",   "endonym": "English" }
   ],
 

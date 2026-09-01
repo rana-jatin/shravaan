@@ -14,14 +14,25 @@
 import { randomUUID } from "node:crypto";
 import type { JsonContext, LanguageCode } from "../domain/types.ts";
 import { ToolRegistry, validateArgs } from "./registry.ts";
-import type { PendingCall, ToolCall, ToolResult } from "./types.ts";
+import type { PendingCall, ProgressKey, SessionToolHost, ToolCall, ToolResult } from "./types.ts";
 
 export type ExecutorDeps = {
   registry: ToolRegistry;
   uid: string;
   sid: string;
-  /** Speak a filler. Called at most once per call, and only if it runs slow. */
-  speakFiller: (language: LanguageCode) => void;
+  /**
+   * A call has run past its filler threshold.
+   *
+   * Called at most once PER CALL, but the session may still decline to say
+   * anything: with calls now running concurrently, two slow tools in one round
+   * would otherwise stack two fillers back to back, and a model that already
+   * introduced the call itself has made the filler redundant. The round-level
+   * decision lives in the orchestrator, which is the only thing that knows what
+   * a round is. `progressKey` is the tool's own line, when it has one.
+   */
+  speakFiller: (language: LanguageCode, progressKey?: ProgressKey) => void;
+  /** The live session, narrowed. Handed to every handler. See SessionToolHost. */
+  host: SessionToolHost;
   /** Persist / clear the in-flight entry. Failures here must not break the call. */
   setPending?: (call: PendingCall) => Promise<void>;
   clearPending?: (callId: string) => Promise<void>;
@@ -120,7 +131,7 @@ export class ToolExecutor {
       const live = this.#pending.get(callId);
       if (!live || live.filler_spoken) return;
       live.filler_spoken = true;
-      this.#d.speakFiller(ctx.language);
+      this.#d.speakFiller(ctx.language, tool.progress_key);
     }, tool.filler_threshold_ms);
     fillerTimer.unref?.();
 
@@ -138,6 +149,7 @@ export class ToolExecutor {
         language: ctx.language,
         jsonContext: ctx.jsonContext,
         signal: abort.signal,
+        host: this.#d.host,
       });
 
       if (tool.mutates_context) {

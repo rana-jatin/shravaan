@@ -37,7 +37,7 @@ This is the finding that actually matters, and it sits *inside* the vendor.
 | Source | [Saaras](https://docs.sarvam.ai/api/getting-started/models/saaras.md) | [Bulbul](https://docs.sarvam.ai/api/getting-started/models/bulbul.md) |
 
 **Speakable (the product's real language list):** `hi-IN`, `bn-IN`, `ta-IN`, `te-IN`,
-`gu-IN`, `kn-IN`, `ml-IN`, `mr-IN`, `pa-IN`, `od-IN`, `en-IN`.
+`gu-IN`, `kn-IN`, `ml-IN`, `mr-IN`, `pa-IN`, `or-IN`, `en-IN`.
 
 **Heard but unspeakable — 12 Indian languages:** Urdu `ur-IN`, Assamese `as-IN`,
 Nepali `ne-IN`, Konkani `kok-IN`, Kashmiri `ks-IN`, Sindhi `sd-IN`, Sanskrit `sa-IN`,
@@ -51,7 +51,7 @@ model pages.
 **Bulbul v3 is the only text-to-speech in the system, and its 11 languages are the product's
 complete language set.**
 
-`hi-IN`, `bn-IN`, `ta-IN`, `te-IN`, `gu-IN`, `kn-IN`, `ml-IN`, `mr-IN`, `pa-IN`, `od-IN`,
+`hi-IN`, `bn-IN`, `ta-IN`, `te-IN`, `gu-IN`, `kn-IN`, `ml-IN`, `mr-IN`, `pa-IN`, `or-IN`,
 `en-IN`. Hinglish and code-mixing within that set are in scope.
 
 **The other 12 Indian languages are out of scope and refused at session open**, in a language

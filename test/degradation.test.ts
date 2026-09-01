@@ -33,6 +33,7 @@ import {
   type DegradationKey,
 } from "../src/domain/degradation.ts";
 import { FLUX_MULTI_COVERAGE, redundancyProfile, standbyFor } from "../src/domain/asr-failover.ts";
+import { ASR_STABLE_MS, reopenDecision } from "../src/domain/asr-reopen.ts";
 import { BufferedMemWriteStream } from "../src/memory/buffered-stream.ts";
 import { InMemoryMemWriteStream, type MemWriteStream } from "../src/memory/stream.ts";
 import { HoldingAudio, REQUIRED_CLIPS } from "../src/audio/holding-audio.ts";
@@ -364,6 +365,77 @@ describe("asr failover", () => {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The reopen ladder, and the regression that motivated extracting it.
+ *
+ * The session used to zero this count on the socket's `open` event. Sarvam
+ * accepts the WebSocket upgrade and only then rejects a bad parameter, so a
+ * doomed socket opens exactly like a healthy one and the count went 0 → 1 → 0 → 1
+ * forever. Both thresholds here are above 1, so both were dead code against a
+ * live key: no failover, and — worse — no give-up, leaving the session
+ * reconnecting in a tight loop while the user heard nothing.
+ */
+describe("asr reopen ladder", () => {
+  const base = { standbyAvailable: false, maxReopens: 4, rand: () => 0 };
+
+  it("counts consecutive failures when the socket never worked", () => {
+    // THE REGRESSION. Each of these is an open-then-reject, the exact shape that
+    // used to reset the count. The attempt number must climb.
+    const attempts = [0, 1, 2, 3].map(
+      (reopens) => reopenDecision({ ...base, reopens, socketWasStable: false }).reopens,
+    );
+    assert.deepEqual(attempts, [1, 2, 3, 4], "a rejected socket must not look like a fresh start");
+  });
+
+  it("stops reconnecting once the budget is spent", () => {
+    const d = reopenDecision({ ...base, reopens: 4, socketWasStable: false });
+    assert.equal(d.action, "lose_hearing", "the loop has to end somewhere the user can hear about");
+  });
+
+  it("reconnects rather than giving up while budget remains", () => {
+    const d = reopenDecision({ ...base, reopens: 0, socketWasStable: false });
+    assert.equal(d.action, "reopen");
+    assert.equal(d.action === "reopen" && typeof d.delayMs, "number");
+  });
+
+  it("treats a connection that actually ran as a fresh incident", () => {
+    // Four failures spread across an hour of healthy conversation must not
+    // accumulate into a mute — the concern that motivated the original reset.
+    const d = reopenDecision({ ...base, reopens: 4, socketWasStable: true });
+    assert.equal(d.reopens, 1);
+    assert.equal(d.action, "reopen", "a long-lived socket dropping is incident one, not five");
+  });
+
+  it("fails over on the second failure, not the first", () => {
+    // Deepgram publishes no India region, so relocating a user's voice on one
+    // transient blip would be a compliance decision made by a network hiccup.
+    const first = reopenDecision({ ...base, standbyAvailable: true, reopens: 0, socketWasStable: false });
+    assert.equal(first.action, "reopen", "one blip is not grounds to leave the country");
+
+    const second = reopenDecision({ ...base, standbyAvailable: true, reopens: 1, socketWasStable: false });
+    assert.equal(second.action, "failover");
+  });
+
+  it("prefers failover over going deaf when a standby exists", () => {
+    const d = reopenDecision({ ...base, standbyAvailable: true, reopens: 9, socketWasStable: false });
+    assert.equal(d.action, "failover", "a covered language should relocate before it stops hearing");
+  });
+
+  it("goes deaf rather than pretending, for the nine languages with no standby", () => {
+    const d = reopenDecision({ ...base, standbyAvailable: false, reopens: 9, socketWasStable: false });
+    assert.equal(d.action, "lose_hearing");
+  });
+
+  it("separates a rejected socket from a working one by a wide margin", () => {
+    // Observed: parameter rejections closed in under half a second, real
+    // sessions live for minutes. The threshold must not sit near either.
+    assert.ok(ASR_STABLE_MS >= 5_000, "too low: a slow rejection would count as working");
+    assert.ok(ASR_STABLE_MS <= 60_000, "too high: real sessions would never reset the count");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 const ev = (kind: MemWriteKind, n: number): MemWriteEvent => ({
   event_id: `e${n}`,
   sid: "s1",
@@ -500,7 +572,7 @@ describe("pre-rendered holding audio", () => {
     // apology, never nothing.
     const h = new HoldingAudio({ dir, expectedSampleRate: 24000 });
     h.load();
-    const odia = h.get("degraded.voice_unavailable", "od-IN");
+    const odia = h.get("degraded.voice_unavailable", "or-IN");
     assert.ok(odia, "a missing clip must fall back, not vanish");
   });
 

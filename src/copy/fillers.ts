@@ -13,7 +13,7 @@
  */
 
 import type { LanguageCode } from "../domain/types.ts";
-import type { FallbackKey } from "../tools/types.ts";
+import type { FallbackKey, ProgressKey } from "../tools/types.ts";
 
 export type CopySet = { variants: string[]; needsNativeReview: boolean };
 
@@ -32,7 +32,7 @@ export const FILLERS: Record<LanguageCode, CopySet> = {
   "ml-IN": draft("ഒരു നിമിഷം.", "ഞാൻ നോക്കട്ടെ."),
   "mr-IN": draft("एक मिनिट.", "मी बघतो."),
   "pa-IN": draft("ਇੱਕ ਮਿੰਟ।", "ਮੈਂ ਵੇਖਦਾ ਹਾਂ।"),
-  "od-IN": draft("ଏକ ମିନିଟ୍।", "ମୁଁ ଦେଖୁଛି।"),
+  "or-IN": draft("ଏକ ମିନିଟ୍।", "ମୁଁ ଦେଖୁଛି।"),
 };
 
 /**
@@ -53,7 +53,7 @@ export const FALLBACKS: Record<FallbackKey, Record<LanguageCode, CopySet>> = {
     "ml-IN": draft("ഇത് കുറച്ച് സമയമെടുക്കുന്നു — അല്പം കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കാമോ?"),
     "mr-IN": draft("याला जास्त वेळ लागतोय — थोड्या वेळाने पुन्हा प्रयत्न करूया?"),
     "pa-IN": draft("ਇਸ ਵਿੱਚ ਜ਼ਿਆਦਾ ਸਮਾਂ ਲੱਗ ਰਿਹਾ ਹੈ — ਥੋੜ੍ਹੀ ਦੇਰ ਬਾਅਦ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੀਏ?"),
-    "od-IN": draft("ଏଥିରେ ଅଧିକ ସମୟ ଲାଗୁଛି — ଟିକେ ପରେ ପୁଣି ଚେଷ୍ଟା କରିବା?"),
+    "or-IN": draft("ଏଥିରେ ଅଧିକ ସମୟ ଲାଗୁଛି — ଟିକେ ପରେ ପୁଣି ଚେଷ୍ଟା କରିବା?"),
   },
   "tool.unavailable": {
     "en-IN": ready("I can't reach that right now. Can I help with something else?"),
@@ -66,7 +66,7 @@ export const FALLBACKS: Record<FallbackKey, Record<LanguageCode, CopySet>> = {
     "ml-IN": draft("ഇപ്പോൾ അത് ലഭ്യമല്ല. മറ്റെന്തെങ്കിലും സഹായിക്കട്ടെ?"),
     "mr-IN": draft("सध्या ते उपलब्ध नाही. दुसरं काही मदत करू?"),
     "pa-IN": draft("ਹੁਣ ਉਹ ਉਪਲਬਧ ਨਹੀਂ ਹੈ। ਹੋਰ ਕਿਸੇ ਚੀਜ਼ ਵਿੱਚ ਮਦਦ ਕਰਾਂ?"),
-    "od-IN": draft("ବର୍ତ୍ତମାନ ତାହା ଉପଲବ୍ଧ ନାହିଁ। ଅନ୍ୟ କିଛିରେ ସାହାଯ୍ୟ କରିବି?"),
+    "or-IN": draft("ବର୍ତ୍ତମାନ ତାହା ଉପଲବ୍ଧ ନାହିଁ। ଅନ୍ୟ କିଛିରେ ସାହାଯ୍ୟ କରିବି?"),
   },
   "tool.not_entitled": {
     "en-IN": ready("That isn't something I can do on your account."),
@@ -79,7 +79,7 @@ export const FALLBACKS: Record<FallbackKey, Record<LanguageCode, CopySet>> = {
     "ml-IN": draft("ഇത് നിങ്ങളുടെ അക്കൗണ്ടിൽ എനിക്ക് ചെയ്യാൻ കഴിയില്ല."),
     "mr-IN": draft("हे तुमच्या खात्यावर मी करू शकत नाही."),
     "pa-IN": draft("ਇਹ ਤੁਹਾਡੇ ਖਾਤੇ 'ਤੇ ਮੈਂ ਨਹੀਂ ਕਰ ਸਕਦਾ।"),
-    "od-IN": draft("ଏହା ଆପଣଙ୍କ ଖାତାରେ ମୁଁ କରିପାରିବି ନାହିଁ।"),
+    "or-IN": draft("ଏହା ଆପଣଙ୍କ ଖାତାରେ ମୁଁ କରିପାରିବି ନାହିଁ।"),
   },
   "tool.invalid_args": {
     "en-IN": ready("I didn't quite catch the details — could you say that again?"),
@@ -92,7 +92,7 @@ export const FALLBACKS: Record<FallbackKey, Record<LanguageCode, CopySet>> = {
     "ml-IN": draft("വിശദാംശങ്ങൾ ശരിക്ക് മനസ്സിലായില്ല — ഒന്നുകൂടി പറയാമോ?"),
     "mr-IN": draft("तपशील नीट समजले नाहीत — पुन्हा सांगाल?"),
     "pa-IN": draft("ਵੇਰਵੇ ਠੀਕ ਸਮਝ ਨਹੀਂ ਆਏ — ਦੁਬਾਰਾ ਦੱਸੋਗੇ?"),
-    "od-IN": draft("ବିବରଣୀ ଠିକ୍ ବୁଝି ପାରିଲି ନାହିଁ — ପୁଣି କହିବେ କି?"),
+    "or-IN": draft("ବିବରଣୀ ଠିକ୍ ବୁଝି ପାରିଲି ନାହିଁ — ପୁଣି କହିବେ କି?"),
   },
   "tool.generic": {
     "en-IN": ready("Something went wrong there. Shall we try something else?"),
@@ -105,7 +105,81 @@ export const FALLBACKS: Record<FallbackKey, Record<LanguageCode, CopySet>> = {
     "ml-IN": draft("അവിടെ എന്തോ പിഴച്ചു. മറ്റെന്തെങ്കിലും നോക്കാമോ?"),
     "mr-IN": draft("तिथे काहीतरी चुकलं. दुसरं काही बघूया?"),
     "pa-IN": draft("ਉੱਥੇ ਕੁਝ ਗਲਤ ਹੋ ਗਿਆ। ਹੋਰ ਕੁਝ ਵੇਖੀਏ?"),
-    "od-IN": draft("ସେଠାରେ କିଛି ଭୁଲ୍ ହେଲା। ଅନ୍ୟ କିଛି ଦେଖିବା?"),
+    "or-IN": draft("ସେଠାରେ କିଛି ଭୁଲ୍ ହେଲା। ଅନ୍ୟ କିଛି ଦେଖିବା?"),
+  },
+};
+
+/**
+ * Spoken while a specific slow tool runs, in place of the generic filler.
+ *
+ * WHY THESE EXIST WHEN THE MODEL USUALLY SPEAKS FIRST. The prompt now asks the
+ * model to announce its own tool calls and gets that about 78% of the time (the
+ * measurements are in SYSTEM_PROMPT). Its line is better than anything here —
+ * specific to the question, and genuinely fluent in the nine languages where
+ * these are still placeholder text.
+ *
+ * These are the other 22%. Roughly one tool turn in four still begins in
+ * silence, and that is the turn these were written for.
+ *
+ * These are for the external tools in the plan, none of which exist yet. Written
+ * ahead of the tools on the same principle as the pre-rendered outage audio: the
+ * moment you need the words is the worst moment to be writing them.
+ *
+ * Phrased as a person, not a process. "Fetching weather data" is a machine
+ * describing itself; "let me check the weather" is someone helping you.
+ */
+export const PROGRESS: Record<ProgressKey, Record<LanguageCode, CopySet>> = {
+  "progress.weather": {
+    "en-IN": ready("Let me check the weather.", "Just looking that up."),
+    "hi-IN": ready("मैं मौसम देखता हूँ।", "ज़रा देखता हूँ।"),
+    "bn-IN": draft("আমি আবহাওয়া দেখছি।"),
+    "ta-IN": draft("வானிலையைப் பார்க்கிறேன்."),
+    "te-IN": draft("వాతావరణం చూస్తాను."),
+    "gu-IN": draft("હું હવામાન જોઉં છું."),
+    "kn-IN": draft("ಹವಾಮಾನ ನೋಡುತ್ತೇನೆ."),
+    "ml-IN": draft("കാലാവസ്ഥ നോക്കട്ടെ."),
+    "mr-IN": draft("मी हवामान बघतो."),
+    "pa-IN": draft("ਮੈਂ ਮੌਸਮ ਵੇਖਦਾ ਹਾਂ।"),
+    "or-IN": draft("ମୁଁ ପାଣିପାଗ ଦେଖୁଛି।"),
+  },
+  "progress.news": {
+    "en-IN": ready("Let me see what's happening.", "Checking the news now."),
+    "hi-IN": ready("मैं ख़बरें देखता हूँ।", "ज़रा ख़बर देखता हूँ।"),
+    "bn-IN": draft("আমি খবর দেখছি।"),
+    "ta-IN": draft("செய்திகளைப் பார்க்கிறேன்."),
+    "te-IN": draft("వార్తలు చూస్తాను."),
+    "gu-IN": draft("હું સમાચાર જોઉં છું."),
+    "kn-IN": draft("ಸುದ್ದಿ ನೋಡುತ್ತೇನೆ."),
+    "ml-IN": draft("വാർത്ത നോക്കട്ടെ."),
+    "mr-IN": draft("मी बातम्या बघतो."),
+    "pa-IN": draft("ਮੈਂ ਖ਼ਬਰਾਂ ਵੇਖਦਾ ਹਾਂ।"),
+    "or-IN": draft("ମୁଁ ଖବର ଦେଖୁଛି।"),
+  },
+  "progress.calendar": {
+    "en-IN": ready("Let me look at your calendar.", "Checking your diary."),
+    "hi-IN": ready("मैं आपका कैलेंडर देखता हूँ।", "ज़रा देखता हूँ क्या रखा है।"),
+    "bn-IN": draft("আমি আপনার ক্যালেন্ডার দেখছি।"),
+    "ta-IN": draft("உங்கள் நாட்காட்டியைப் பார்க்கிறேன்."),
+    "te-IN": draft("మీ క్యాలెండర్ చూస్తాను."),
+    "gu-IN": draft("હું તમારું કૅલેન્ડર જોઉં છું."),
+    "kn-IN": draft("ನಿಮ್ಮ ಕ್ಯಾಲೆಂಡರ್ ನೋಡುತ್ತೇನೆ."),
+    "ml-IN": draft("നിങ്ങളുടെ കലണ്ടർ നോക്കട്ടെ."),
+    "mr-IN": draft("मी तुमचं कॅलेंडर बघतो."),
+    "pa-IN": draft("ਮੈਂ ਤੁਹਾਡਾ ਕੈਲੰਡਰ ਵੇਖਦਾ ਹਾਂ।"),
+    "or-IN": draft("ମୁଁ ଆପଣଙ୍କ କ୍ୟାଲେଣ୍ଡର ଦେଖୁଛି।"),
+  },
+  "progress.mail": {
+    "en-IN": ready("Sending that now.", "One moment, sending."),
+    "hi-IN": ready("मैं अभी भेज रहा हूँ।", "एक मिनट, भेज रहा हूँ।"),
+    "bn-IN": draft("আমি এখনই পাঠাচ্ছি।"),
+    "ta-IN": draft("இப்போது அனுப்புகிறேன்."),
+    "te-IN": draft("ఇప్పుడే పంపుతున్నాను."),
+    "gu-IN": draft("હું હમણાં મોકલું છું."),
+    "kn-IN": draft("ಈಗ ಕಳುಹಿಸುತ್ತಿದ್ದೇನೆ."),
+    "ml-IN": draft("ഇപ്പോൾ അയയ്ക്കുന്നു."),
+    "mr-IN": draft("मी आत्ता पाठवतो."),
+    "pa-IN": draft("ਮੈਂ ਹੁਣੇ ਭੇਜ ਰਿਹਾ ਹਾਂ।"),
+    "or-IN": draft("ମୁଁ ଏବେ ପଠାଉଛି।"),
   },
 };
 
@@ -121,15 +195,32 @@ export function resolveFallback(key: FallbackKey, language: LanguageCode): strin
   return set.variants[0]!;
 }
 
-/** Languages whose filler or fallback copy is still placeholder text. */
+/**
+ * A tool's own progress line. Rotates like the generic filler, because someone
+ * who asks about the weather twice in an evening should not hear the identical
+ * sentence both times.
+ */
+export function resolveProgress(
+  key: ProgressKey,
+  language: LanguageCode,
+  turnIndex = 0,
+): string {
+  const table = PROGRESS[key];
+  const set = table[language] ?? table["hi-IN"] ?? table["en-IN"]!;
+  return set.variants[turnIndex % set.variants.length]!;
+}
+
+/** Languages whose filler, fallback or progress copy is still placeholder text. */
 export function pendingCopyReview(): Array<{ scope: string; language: LanguageCode }> {
   const out: Array<{ scope: string; language: LanguageCode }> = [];
   for (const [lang, set] of Object.entries(FILLERS)) {
     if (set.needsNativeReview) out.push({ scope: "filler", language: lang });
   }
-  for (const [key, table] of Object.entries(FALLBACKS)) {
-    for (const [lang, set] of Object.entries(table)) {
-      if (set.needsNativeReview) out.push({ scope: key, language: lang });
+  for (const table of [FALLBACKS, PROGRESS]) {
+    for (const [key, byLanguage] of Object.entries(table)) {
+      for (const [lang, set] of Object.entries(byLanguage)) {
+        if (set.needsNativeReview) out.push({ scope: key, language: lang });
+      }
     }
   }
   return out;

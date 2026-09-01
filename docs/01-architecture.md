@@ -210,7 +210,7 @@ different sets, and the difference is 12 languages
 | 1 | Hindi | `hi-IN` | | 7 | Malayalam | `ml-IN` |
 | 2 | Bengali | `bn-IN` | | 8 | Marathi | `mr-IN` |
 | 3 | Tamil | `ta-IN` | | 9 | Punjabi | `pa-IN` |
-| 4 | Telugu | `te-IN` | | 10 | Odia | `od-IN` |
+| 4 | Telugu | `te-IN` | | 10 | Odia | `or-IN` |
 | 5 | Gujarati | `gu-IN` | | 11 | English (Indian) | `en-IN` |
 | 6 | Kannada | `kn-IN` | | | | |
 

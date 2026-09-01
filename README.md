@@ -20,36 +20,66 @@ See [docs/04-milestones.md](docs/04-milestones.md) for the full slice plan.
 |---|---|
 | Device WebSocket transport | **AEC (device side — needs hardware)** |
 | Sarvam ASR / LLM / TTS clients | Wake word |
-| Turn state machine + barge-in | **Pre-rendered outage audio (needs a live key — `npm run render:holding`)** |
+| Turn state machine + barge-in | **Pre-rendered outage audio beyond `en-IN`/`hi-IN`** |
 | **Speakability gate — all three gates** | **Durable memory backend ([ADR 0004](docs/adr/0004-vector-store.md) still Proposed)** |
 | **Echo guard — the self-interruption defence** | **A real multilingual embedder** |
 | **Working memory: 12-turn window, idle TTLs, turn lock, resume** | Live failure injection (slice 8's exit criterion) |
 | **Long-term memory: `mem:writes`, distiller, supersede/soft-delete, profile** | |
-| **Tools: entitlement gating, deadlines, rotating fillers** | |
+| **Function calling: OpenAI-style, verified on sarvam-105b** | Tool selection quality at scale (unmeasured) |
+| **8 built-in tools + entitlement gating, deadlines, fillers** | |
 | **Degradation: ledger, circuit breaker, jittered backoff, buffered `mem:writes`** | |
 | **Deepgram Flux ASR standby** (`hi-IN`/`en-IN`, off by default) | |
+| **Care signals** — post-session sentiment + care watch-list (`en` only, off by default) | **Care-signal field names against a live key (`npm run verify:care`)** |
 | Clause chunker (streams TTS at clause boundaries) | |
 | Spoken copy in 11 languages | |
 
 ---
 
-## ⚠ Before you run this against a live key
+## The provider contract, now verified
 
-**The provider endpoint paths, auth header name and message field names in
-`src/providers/*` are UNVERIFIED.** They were reconstructed from Sarvam's guide
-pages; the API-reference pages that would confirm them returned 404 during
-research ([docs/05-open-questions.md](docs/05-open-questions.md) Q12).
+The endpoint paths, auth header and message field names in `src/providers/*` were
+reconstructed from Sarvam's guide pages, because the API-reference pages returned
+404 during research ([Q12](docs/05-open-questions.md)). They have now been run
+against a live key. **The paths and the `api-subscription-key` header were right;
+five field-level guesses were wrong**, and are fixed:
 
-Two more unresolved items are wired as configurable rather than assumed:
+| Guessed | Actually | Symptom while wrong |
+|---|---|---|
+| `language_code=unknown` for auto-detect | **`auto`** | socket closed 4000 on every keyless-profile session |
+| Odia is `od-IN` | **`or-IN`** | closed 4000 — Odia never worked at all |
+| ASR frames keyed on `type` | **`event`** | every ASR frame silently dropped |
+| ASR audio as `{type:"audio_input", audio:<base64>}` | **raw binary frames** | accepted and ignored; no VAD, no transcript, no error |
+| TTS config flat, `language_code`, speaker `Shubh` | **nested in `data`, `target_language_code`, `shubh`** | 422 on connect, reconnect loop, never spoke |
 
-- **The auto-detect token.** Sarvam's docs give three different answers —
-  `auto`, `unknown`, or "explicit language required". `ASR_AUTODETECT_TOKEN`
-  defaults to `unknown`. ([Q1](docs/05-open-questions.md))
+Two of these fail *silently* — the socket stays open and healthy-looking and simply
+never produces a transcript. Assume nothing here is right because it doesn't throw.
+
+### And then Deepgram, where the same mistake was made twice
+
+The Flux standby was reconstructed the same way, from documentation, and dialled against a
+live key on 2026-09-01 with `npm run verify:asr`. The auth header (`Authorization: Token`),
+the `/v2/listen` path and the model name were all right. One field-level guess was wrong:
+
+| Guessed | Actually | Symptom while wrong |
+|---|---|---|
+| Flux frames keyed on `type` | **`type: "TurnInfo"`, name in `event`** | the entire ASR standby emitted nothing, ever |
+| `language`, a string | **`languages`, an array** | the standby never reported a language |
+
+**Look at row three of the Sarvam table.** It is the same defect — frames keyed on `type`
+when the name lives in `event` — found once, written down, and then made again in the next
+ASR client. A lesson recorded in a README is not a lesson applied to the next file.
+
+The standby had been shipped, tested by 566 passing tests, and was incapable of hearing a
+single word. See [D11](docs/07-defect-register.md).
+
+Still open:
+
 - **Whether one Bulbul speaker sounds like the same person across languages.**
-  Undocumented, and the free-switching persona depends on it. ([Q2](docs/05-open-questions.md))
-
-Both are answered by [Slice 0](docs/04-milestones.md#slice-0--two-listening-tests-half-a-day-no-product)
-— half a day with an API key, before anything else is built on top.
+  Undocumented, and the free-switching persona depends on it.
+  ([Q2](docs/05-open-questions.md)) — needs a human listening, not a test.
+- **Whether per-turn switching works on the raw socket.** `auto` is accepted and
+  `hi-IN` detection is confirmed; a mid-stream Hindi→English switch is not yet
+  exercised. ([Q1](docs/05-open-questions.md))
 
 ---
 
@@ -59,7 +89,7 @@ Both are answered by [Slice 0](docs/04-milestones.md#slice-0--two-listening-test
 
 Hindi `hi-IN` · Bengali `bn-IN` · Tamil `ta-IN` · Telugu `te-IN` · Gujarati `gu-IN` ·
 Kannada `kn-IN` · Malayalam `ml-IN` · Marathi `mr-IN` · Punjabi `pa-IN` ·
-Odia `od-IN` · English `en-IN`
+Odia `or-IN` · English `en-IN`
 
 Hinglish and code-mixing within that set are first-class.
 
@@ -81,9 +111,12 @@ succeeds, the LLM succeeds, and the user hears nothing.
 npm install
 cp .env.example .env      # add SARVAM_API_KEY
 npm run typecheck
-npm test                  # 213 tests, no credentials needed
+npm test                  # 579 tests, no credentials needed
 npm run dev               # device WebSocket server on :8080
 npm run render:holding    # needs a live key — see "before a Bulbul outage" below
+npm run verify:tools      # needs a live key — re-checks the tool-calling contract
+npm run verify:care       # needs a Deepgram key — checks /v1/read before you trust a trend
+npm run verify:asr        # needs a Deepgram key — proves the ASR standby can actually hear
 ```
 
 Requires Node ≥ 22.6 (uses native TypeScript type stripping — no build step).
@@ -114,8 +147,10 @@ synthesised — so it is rendered ahead of time and shipped as bytes:
 npm run render:holding    # writes assets/holding/*.pcm + manifest.json
 ```
 
-`assets/holding/` **is currently empty.** Until it is generated and committed, a
-Bulbul outage closes the session in silence; the server logs
+`assets/holding/` currently holds **`en-IN` and `hi-IN` only**. The other nine
+languages fall down the refusal ladder to Hindi, which is the ladder working as
+designed rather than a gap — but a Bulbul outage during an Odia conversation
+apologises in Hindi. Without any clip at all the server logs
 `no pre-rendered audio — closing in silence` rather than letting that pass as
 normal. Regenerate whenever `TTS_SPEAKER` or the copy changes, or the apology
 arrives in a different voice from the rest of the conversation.
@@ -126,6 +161,152 @@ region**, while Sarvam is India-resident by design. Enabling
 `ASR_FAILOVER_ENABLED=true` means a network blip can relocate a user's voice out
 of the country mid-conversation. That is a decision for whoever owns the
 data-protection posture ([Q14](docs/05-open-questions.md)).
+
+---
+
+## Function calling
+
+OpenAI-shaped, and **verified against a live key** rather than assumed —
+`npm run verify:tools`. [ADR 0003](docs/adr/0003-llm.md) had flagged sarvam-105b's
+tool-calling as undocumented and named this as the thing that had to be tested
+before anything was built on it.
+
+It speaks the dialect: `{index, id, type, function:{name, arguments}}` deltas,
+long arguments fragmented token by token, all four `tool_choice` forms honoured,
+multiple calls in a single round, and `role:"tool"` results round-tripping into
+prose.
+
+**One divergence, and it was silent.** For a short or empty argument object
+Sarvam sends the finished value whole and then sends it *again* — so the obvious
+`args += fragment` yields `{}{}`, `JSON.parse` throws, and the original parser's
+catch handed the tool **empty arguments**. Accidentally correct for a
+no-argument tool; silent data loss for every other one. Handled in
+`accumulateArgs`, with the captured frames as a regression test.
+
+The built-ins, all of which need nothing but the session itself — no key, no URL,
+no network, so a fresh clone has a working companion:
+
+| Tool | Does |
+|---|---|
+| `get_time` | Clock + timezone. A tool rather than a prompt line, so the cached prefix stays byte-stable |
+| `repeat_that` | Returns the previous reply verbatim — regenerating gives different words, which is exactly wrong |
+| `set_language` | An **explicitly requested** switch. Routed through the same speakability verdict as gates 2 and 3 |
+| `set_speaking_pace` | Slower / faster / normal, clamped |
+| `remember_this` | Explicit memory write — the first producer of `explicit_recall` |
+| `forget_this` | Soft delete at the user's request, on strong matches only |
+| `recall` | On-demand search. Bounded exception to keeping memory off the turn path |
+| `end_conversation` | Closes *after* the farewell drains, never mid-word |
+
+And two that leave the process. These are **factories, registered only where the
+deployment configured them**, because a tool the operator cannot serve must never
+be described to the user — an agent that offers the weather and then withdraws it
+is worse than one that never mentioned it.
+
+| Tool | Does | Off unless |
+|---|---|---|
+| `get_weather` | Current conditions + today's forecast, via Open-Meteo. Geocodes the place name first | `WEATHER_ENABLED=true` |
+| `get_news` | Today's headlines from RSS. Categories are whatever you point it at | `NEWS_FEEDS` is set |
+
+⚠ **`get_weather` is the one hop that is not Sarvam and not in India.** Open-Meteo
+is EU-hosted, so an enabled deployment sends a place name abroad on every weather
+question. That is much less than the ASR failover risks — a city name, not the
+user's voice — but it is the same decision, which is why it is opt-in and why the
+boot log says so out loud. `get_news` takes feed URLs rather than a vendor
+precisely so a domestic outlet keeps that hop inside India
+([Q14](docs/05-open-questions.md)).
+
+**While a slow tool runs, the user hears something.** One progress line per
+round — not per call, since calls now run concurrently and two slow tools would
+otherwise stutter two fillers back to back. Tools that can genuinely run long
+declare a `progress_key` and get their own line ("let me check the weather");
+everything else falls back to the generic rotating filler. The eight built-ins
+declare none, because none of them can be slow enough to need one — they are
+capped at 250 ms with the filler pinned above the deadline, so it can never fire.
+`get_weather` and `get_news` are the first tools that can genuinely be slow, and
+they claim the `progress.weather` and `progress.news` copy that has been sitting
+in `src/copy/fillers.ts` since slice 6, written ahead of the tools on the same
+principle as the pre-rendered outage audio.
+
+The prompt asks the model to announce its own call before making one. On
+`sarvam-105b` that worked on roughly 78% of tool turns, and getting there took
+measurement rather than politeness: a plain instruction scored 0/9, a forceful
+imperative plus an inline example scored 7/9, and neither lever worked alone
+([ADR 0003](docs/adr/0003-llm.md) has the table).
+
+**That prompt does not transfer to `sarvam-105b-conversations`, which is what we
+now run.** Re-measured on the shipped prompt, same nine asks, twice: **2/9 —
+22%**, and both preambles were the Hindi asks. Every English one called silently.
+So the progress copy is now carrying roughly four tool turns in five rather than
+one in five, and the prompt needs re-tuning against this model.
+
+It matters far less than that inversion suggests, because the silence it covers
+also collapsed. An un-preambled tool turn is now quiet for a median of **1.0 s**
+(min 0.64, max 1.73) against the **12.8 s** it would have been on the reasoning
+model. The preamble was defending against a thirteen-second void; it is now
+defending against about a second.
+
+Three rules these follow, and any tool added later should too:
+
+- **A domain outcome is data, not an error.** `ok: false` costs a
+  `spoken_fallback_key`, and every key costs eleven translations — nine still
+  placeholder. `{repeated: false, reason: "nothing_said_yet"}` gets narrated
+  correctly in Odia for free. Errors stay for infrastructure that broke.
+- **Enum tokens stay English identifiers.** A model reasoning in Hindi will
+  answer a translated enum in Hindi, and validation then rejects a call the user
+  legitimately made.
+- **Deadlines are conversational, not network-sized.** The 8 s default suits a
+  backend call; every built-in is in-process and capped at 250 ms, with fillers
+  pinned above the deadline so they can never fire.
+
+**Tools multiply the binding rate limit.** Sarvam-105B is 40 req/min *per
+account* — the system's real concurrency ceiling ([ADR 0003](docs/adr/0003-llm.md)).
+A turn with no tools is one request; a turn that goes three tool rounds is four.
+Calls within a round now run concurrently, so a round costs the slowest call
+rather than the sum, but rounds are still serial by construction and each one is
+another request against a limit shared by every live conversation.
+
+---
+
+## Care signals — and what "Audio Intelligence" is not
+
+Deepgram's four intelligence features (sentiment, intents, topics, summarisation) are wired
+here as an **opt-in, post-session** read of the transcript. Two things about that sentence are
+the whole design.
+
+**Post-session.** The analysis runs in the memory worker after a session closes, on the batch
+`/v1/read` endpoint, and its result is attached to the episode. **Nothing on the voice path
+calls Deepgram for this** — not on a turn, not at close, not behind a filler. The one tool the
+model can call, `recall_mood`, reads episodes out of the local store and never opens a socket.
+
+**A read of the transcript.** Despite the name, Audio Intelligence does not hear anything: it
+analyses text, and the audio endpoint simply transcribes first. It cannot tell you someone
+*sounded* tired or breathless, only that they used words a model scored low. A care product
+built on the other reading would be built on nothing.
+
+What we take, and what we deliberately leave:
+
+| Feature | Used? | Why |
+|---|---|---|
+| `sentiment` | **yes** | numeric and segment-level, so it trends across days |
+| `intents` + `custom_intent` (strict) | **yes** | a fixed, reviewable watch-list — pain, falls, sleep, loneliness |
+| `summarize` | no | `LlmDistiller` already writes a summary, in the user's own language |
+| `topics` | no | same — and ours are not English-only |
+
+```bash
+CARE_SIGNALS_ENABLED=true    # needs DEEPGRAM_API_KEY; server refuses to boot without it
+npm run verify:care          # before trusting a single number
+```
+
+**Off by default for three reasons, any one sufficient.** Transcripts leave India
+([Q14](docs/05-open-questions.md)); the features are **English only**, so ten of our eleven
+languages are never analysed and the gate refuses code-mixed sessions outright rather than
+scoring half of one; and keeping a trend of how someone sounded is a different promise from
+remembering what they told you.
+
+**It is not an alarm path, by design.** `src/copy/emergency-intent.ts` is local, pre-network,
+sub-second and covers all eleven languages. A batch English-only classifier arriving hours
+later must never sit in front of that. See
+[ADR 0009](docs/adr/0009-audio-intelligence.md).
 
 ---
 
@@ -168,17 +349,28 @@ src/
     backoff.ts          jittered retry, bounded by the user's patience
     circuit-breaker.ts  stops an outage becoming a latency problem
     asr-failover.ts     which languages actually have a second ASR (two)
+    care-signals.ts     the English gate, the watch-list, the trend
     types.ts            mirrors docs/02-data-contracts.md
   providers/            raw WebSocket, not the SDK
     sarvam-{asr,llm,tts}.ts
     deepgram-asr.ts     Flux standby — hi-IN/en-IN, hearing only
+    deepgram-read.ts    /v1/read — batch, off the voice path entirely
+    http.ts             the injectable fetch surface, one place
+  memory/
+    worker.ts           consumes mem:writes, distils, commits
+    care-signals-analyser.ts  gate → call → map, bounded, never throws
   orchestrator/
     session.ts          turn loop, gates, barge-in, degradation
   audio/holding-audio.ts  pre-rendered apology for a TTS outage
   copy/refusals.ts      refusal + closing copy, 11 languages
+  tools/
+    builtin.ts          the 8 session-only tools
+    registry.ts         entitlement gating + strict schema emission
+    executor.ts         deadlines, fillers, pending tracking
   server.ts             device-facing WebSocket server
 scripts/
   render-holding-audio.ts  build-time; needs a working Bulbul
+  verify-tool-calling.ts   probes the tool-calling contract against a live key
 ```
 
 **Why raw WebSockets instead of Sarvam's SDK:** their docs state the JavaScript SDK
@@ -191,6 +383,10 @@ product, so we speak the protocol directly.
 
 ## Known gaps in this code
 
+**Open defects are tracked in [docs/07-defect-register.md](docs/07-defect-register.md)** —
+eight found by audit, each with its cause and its fix. The section below is about what has
+not been *built*; the register is about what is built and wrong.
+
 - **Spoken copy for 9 of 11 languages is placeholder text.** Only `en-IN` and
   `hi-IN` are ready across refusals, fillers and tool fallbacks. The rest are
   flagged `needsNativeReview` and the server logs a warning at boot. They must be
@@ -198,10 +394,11 @@ product, so we speak the protocol directly.
   `src/copy/refusals.ts`, which also explains the grammatical-gender problem
   (Hindi, Marathi, Gujarati and Punjabi inflect the verb for the *speaker's*
   gender, so the copy depends on which Bulbul voice is set).
-- **Sarvam-105B's tool-calling is unverified.** [ADR 0003](docs/adr/0003-llm.md)
-  flagged that nothing in the docs describes its reliability. The parser assumes
-  an OpenAI-compatible `tool_calls` delta; if Sarvam diverges,
-  `src/providers/sarvam-llm.ts` is where it shows up.
+- **Tool selection quality is unmeasured.** The wire format is now verified (see
+  below) and the loop reaches a spoken answer, but nothing yet measures whether
+  the model picks the *right* tool with eight of them offered, or how selection
+  behaves when the conversation is in Malayalam and every tool description is in
+  English. That needs live conversations, not a probe.
 - **No device-side AEC yet — still use headphones.** The server-side echo guard is
   built and defends in depth (suppression window, confirm-on-transcript, and
   self-text correlation, since our own voice comes back as *our own words*). But
