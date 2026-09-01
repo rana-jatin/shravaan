@@ -122,9 +122,11 @@ paraphrase the numbers away.
   rounds and the degradation ladder are one machine. Pieces with a real seam
   were extracted; `#openAsr` touches fourteen pieces of private state and was
   deliberately left alone.
-- **`as unknown as Config` in a test disables the typechecker.** Two fixtures use
-  it. The nested-config migration typechecked clean while thirteen tests failed
-  for exactly that reason.
+- **Never cast to `Config`; use `testConfig()`.** Two fixtures once built one
+  with `as unknown as Config`, and the nested-config migration typechecked clean
+  while thirteen tests failed for exactly that reason. Both now go through
+  `testConfig()`, and eslint rejects the cast — so a config rename fails the
+  build at the fixture instead of at runtime.
 - **`LOG_LEVEL` does nothing.** It is documented in `.env.example` and marked
   NOT IMPLEMENTED. `log()` writes every line it is given.
 - **`DEVICE_FRAME_MS` and `MUSIC_DUCK_VOLUME` are read by the device client**,
