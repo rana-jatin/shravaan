@@ -13,13 +13,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { RadioCatalogue, type RadioCatalogueDeps } from "../src/domain/radio-catalogue.ts";
-import {
-  createPlayMusic,
-  durationSeconds,
-  pickSongLike,
-  type MediaRequest,
-} from "../src/tools/music.ts";
+import { createPlayMusic, durationSeconds, pickSongLike } from "../src/tools/music.ts";
 import { ToolRegistry, toSchema, validateArgs } from "../src/tools/registry.ts";
+import type { MediaRequest } from "../src/tools/types.ts";
 import {
   isStopRequest,
   matchMediaIntent,

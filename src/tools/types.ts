@@ -15,7 +15,6 @@
 
 import type { FactKind, JsonContext, LanguageCode } from "../domain/types.ts";
 import type { MoodTrend } from "../domain/care-signals.ts";
-import type { MediaRequest } from "./music.ts";
 
 /**
  * The slice of the live session a tool is allowed to touch.
@@ -85,6 +84,20 @@ export interface SessionToolHost {
   /** Stop whatever is playing. Safe to call when nothing is. */
   stopMedia(reason: string): void;
 }
+
+/**
+ * What the session hands to the device. Neither mode sends audio.
+ *
+ * Defined here rather than in tools/music.ts, which produces it: this file
+ * declares `SessionToolHost`, so a definition over there made types.ts import
+ * music.ts while music.ts imported types.ts back. The cycle was type-only and
+ * so erased at runtime, but the arrow still pointed the wrong way — a data
+ * contract belongs with the interface that consumes it, not with one producer
+ * of it.
+ */
+export type MediaRequest =
+  | { source: "radio"; title: string; language: LanguageCode; urls: string[] }
+  | { source: "youtube"; title: string; artist: string | null; video_id: string };
 
 export type JsonSchemaProperty = {
   type: "string" | "number" | "integer" | "boolean" | "array";

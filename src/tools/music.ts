@@ -35,18 +35,13 @@ import type { RadioCatalogue } from "../domain/radio-catalogue.ts";
 import type { LanguageCode } from "../domain/types.ts";
 import type { ToolSpec } from "./registry.ts";
 import { getJson, nodeFetch, type HttpFetch } from "../providers/http.ts";
-import type { SessionToolHost } from "./types.ts";
+import type { MediaRequest, SessionToolHost } from "./types.ts";
 
 /** Two network hops at worst (search, then resolve). Radio is one memory read. */
 const MUSIC_MS = 6000;
 const MUSIC_FILLER_MS = 600;
 
 export type MusicMode = "radio" | "song";
-
-/** What the session hands to the device. Neither mode sends audio. */
-export type MediaRequest =
-  | { source: "radio"; title: string; language: LanguageCode; urls: string[] }
-  | { source: "youtube"; title: string; artist: string | null; video_id: string };
 
 export type MusicDeps = {
   catalogue: RadioCatalogue;
