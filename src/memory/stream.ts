@@ -152,7 +152,8 @@ export class RedisMemWriteStream implements MemWriteStream {
 
   async pendingCount(): Promise<number> {
     await this.#ensureGroup();
-    const res = (await this.#redis.xpending(key.memWrites(), GROUP)) as [number, ...unknown[]] | null;
+    const res = (await this.#redis.xpending(key.memWrites(), GROUP)) as
+      [number, ...unknown[]] | null;
     return res?.[0] ?? 0;
   }
 

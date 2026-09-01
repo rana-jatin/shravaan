@@ -46,7 +46,9 @@ export const FALLBACKS: Record<FallbackKey, Record<LanguageCode, CopySet>> = {
     "en-IN": ready("That's taking longer than it should — shall we try again in a moment?"),
     "hi-IN": ready("इसमें ज़्यादा समय लग रहा है — थोड़ी देर में फिर कोशिश करें?"),
     "bn-IN": draft("এটা একটু বেশি সময় নিচ্ছে — একটু পরে আবার চেষ্টা করি?"),
-    "ta-IN": draft("இது எதிர்பார்த்ததை விட நேரம் எடுக்கிறது — சிறிது நேரம் கழித்து முயற்சிக்கலாமா?"),
+    "ta-IN": draft(
+      "இது எதிர்பார்த்ததை விட நேரம் எடுக்கிறது — சிறிது நேரம் கழித்து முயற்சிக்கலாமா?",
+    ),
     "te-IN": draft("ఇది ఎక్కువ సమయం తీసుకుంటోంది — కొంచెం సేపటి తర్వాత మళ్ళీ ప్రయత్నిద్దామా?"),
     "gu-IN": draft("આમાં વધારે સમય લાગી રહ્યો છે — થોડી વારમાં ફરી પ્રયાસ કરીએ?"),
     "kn-IN": draft("ಇದು ಹೆಚ್ಚು ಸಮಯ ತೆಗೆದುಕೊಳ್ಳುತ್ತಿದೆ — ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸೋಣವೇ?"),
@@ -200,11 +202,7 @@ export function resolveFallback(key: FallbackKey, language: LanguageCode): strin
  * who asks about the weather twice in an evening should not hear the identical
  * sentence both times.
  */
-export function resolveProgress(
-  key: ProgressKey,
-  language: LanguageCode,
-  turnIndex = 0,
-): string {
+export function resolveProgress(key: ProgressKey, language: LanguageCode, turnIndex = 0): string {
   const table = PROGRESS[key];
   const set = table[language] ?? table["hi-IN"] ?? table["en-IN"]!;
   return set.variants[turnIndex % set.variants.length]!;

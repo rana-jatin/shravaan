@@ -194,7 +194,7 @@ describe("backoff", () => {
 
 describe("circuit breaker", () => {
   it("opens after the threshold and then fails fast", () => {
-    let clock = 0;
+    const clock = 0;
     const b = new CircuitBreaker({ failureThreshold: 3, openMs: 1000, now: () => clock });
 
     assert.equal(b.canAttempt(), true);
@@ -232,9 +232,13 @@ describe("circuit breaker", () => {
 
   it("guard returns the fallback instead of throwing", async () => {
     const b = new CircuitBreaker({ failureThreshold: 1, openMs: 1000 });
-    const first = await guard(b, async () => {
-      throw new Error("ECONNREFUSED");
-    }, "fallback");
+    const first = await guard(
+      b,
+      async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      "fallback",
+    );
     assert.equal(first, "fallback");
 
     let called = false;
@@ -409,20 +413,44 @@ describe("asr reopen ladder", () => {
   it("fails over on the second failure, not the first", () => {
     // Deepgram publishes no India region, so relocating a user's voice on one
     // transient blip would be a compliance decision made by a network hiccup.
-    const first = reopenDecision({ ...base, standbyAvailable: true, reopens: 0, socketWasStable: false });
+    const first = reopenDecision({
+      ...base,
+      standbyAvailable: true,
+      reopens: 0,
+      socketWasStable: false,
+    });
     assert.equal(first.action, "reopen", "one blip is not grounds to leave the country");
 
-    const second = reopenDecision({ ...base, standbyAvailable: true, reopens: 1, socketWasStable: false });
+    const second = reopenDecision({
+      ...base,
+      standbyAvailable: true,
+      reopens: 1,
+      socketWasStable: false,
+    });
     assert.equal(second.action, "failover");
   });
 
   it("prefers failover over going deaf when a standby exists", () => {
-    const d = reopenDecision({ ...base, standbyAvailable: true, reopens: 9, socketWasStable: false });
-    assert.equal(d.action, "failover", "a covered language should relocate before it stops hearing");
+    const d = reopenDecision({
+      ...base,
+      standbyAvailable: true,
+      reopens: 9,
+      socketWasStable: false,
+    });
+    assert.equal(
+      d.action,
+      "failover",
+      "a covered language should relocate before it stops hearing",
+    );
   });
 
   it("goes deaf rather than pretending, for the nine languages with no standby", () => {
-    const d = reopenDecision({ ...base, standbyAvailable: false, reopens: 9, socketWasStable: false });
+    const d = reopenDecision({
+      ...base,
+      standbyAvailable: false,
+      reopens: 9,
+      socketWasStable: false,
+    });
     assert.equal(d.action, "lose_hearing");
   });
 
@@ -483,7 +511,10 @@ describe("mem:writes under an outage", () => {
     inner.failing = false;
     await s.flush();
 
-    assert.deepEqual(inner.delivered.map((e) => e.tid), [1, 2, 3]);
+    assert.deepEqual(
+      inner.delivered.map((e) => e.tid),
+      [1, 2, 3],
+    );
     assert.equal(s.buffering, false);
     assert.equal(s.bufferedCount, 0);
   });
@@ -496,7 +527,10 @@ describe("mem:writes under an outage", () => {
     // Still buffering: this must not overtake the event already waiting.
     await s.append(ev("turn_completed", 2));
     await s.flush();
-    assert.deepEqual(inner.delivered.map((e) => e.tid), [1, 2]);
+    assert.deepEqual(
+      inner.delivered.map((e) => e.tid),
+      [1, 2],
+    );
   });
 
   it("drops the least important event on overflow, not simply the oldest", async () => {
@@ -517,7 +551,10 @@ describe("mem:writes under an outage", () => {
       inner.delivered.some((e) => e.kind === "correction"),
       "the correction must survive an overflow",
     );
-    assert.deepEqual(inner.delivered.map((e) => e.tid), [1, 3, 4]);
+    assert.deepEqual(
+      inner.delivered.map((e) => e.tid),
+      [1, 3, 4],
+    );
   });
 
   it("counts drops as lost memories rather than swallowing them", async () => {
@@ -552,7 +589,12 @@ describe("pre-rendered holding audio", () => {
     dir = mkdtempSync(join(tmpdir(), "sp-i-holding-"));
     writeFileSync(
       join(dir, "manifest.json"),
-      JSON.stringify({ sample_rate: 24000, encoding: "linear16", speaker: "Shubh", rendered_at: "2026-01-01T00:00:00Z" }),
+      JSON.stringify({
+        sample_rate: 24000,
+        encoding: "linear16",
+        speaker: "Shubh",
+        rendered_at: "2026-01-01T00:00:00Z",
+      }),
     );
     writeFileSync(join(dir, "degraded.voice_unavailable.hi-IN.pcm"), Buffer.from([1, 2, 3, 4]));
     writeFileSync(join(dir, "degraded.voice_unavailable.en-IN.pcm"), Buffer.from([5, 6]));

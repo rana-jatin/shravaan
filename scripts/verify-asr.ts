@@ -84,9 +84,12 @@ async function main(): Promise<void> {
   // The shipped client takes its sample rate from config. The clip is at the TTS
   // rate, not the ASR one, and Flux accepts both — so we hand it the clip's rate
   // rather than resampling and testing audio we do not actually send in anger.
-  const asr = new DeepgramAsr({ ...cfg, asrSampleRate: rate }, {
-    languageHint: LANG.split("-")[0]!,
-  });
+  const asr = new DeepgramAsr(
+    { ...cfg, asrSampleRate: rate },
+    {
+      languageHint: LANG.split("-")[0]!,
+    },
+  );
 
   const partials: AsrTranscript[] = [];
   const finals: AsrTranscript[] = [];
@@ -94,14 +97,20 @@ async function main(): Promise<void> {
   let opened = false;
   let closeInfo: { code: number; reason: string } | null = null;
 
-  asr.on("open", () => { opened = true; });
+  asr.on("open", () => {
+    opened = true;
+  });
   asr.on("partial", (t) => partials.push(t));
   asr.on("final", (t) => finals.push(t));
   asr.on("error", (e) => errors.push(e));
-  asr.on("close", (c) => { closeInfo = c; });
+  asr.on("close", (c) => {
+    closeInfo = c;
+  });
 
   // ── 1 ─────────────────────────────────────────────────────────────────────
-  console.log(`\n-- 1  does the Flux socket open? (${cfg.deepgramWsBase}/v2/listen, ${cfg.deepgramModel})`);
+  console.log(
+    `\n-- 1  does the Flux socket open? (${cfg.deepgramWsBase}/v2/listen, ${cfg.deepgramModel})`,
+  );
   asr.connect();
   const deadline = Date.now() + OPEN_TIMEOUT_MS;
   while (!opened && errors.length === 0 && closeInfo === null && Date.now() < deadline) {
@@ -120,7 +129,9 @@ async function main(): Promise<void> {
   console.log("   ✔ open — auth scheme and model name both accepted");
 
   // ── 2 ─────────────────────────────────────────────────────────────────────
-  console.log(`\n-- 2  does real speech come back as words? (${LANG}, ${(pcm.length / 2 / rate).toFixed(1)}s at ${rate} Hz)`);
+  console.log(
+    `\n-- 2  does real speech come back as words? (${LANG}, ${(pcm.length / 2 / rate).toFixed(1)}s at ${rate} Hz)`,
+  );
   // Paced in 20 ms frames. Flux's end-of-turn detection is timing-dependent;
   // dumping the whole buffer at once tests a stream shape we never produce.
   const frame = Math.floor((rate * 2 * 20) / 1000);
@@ -151,7 +162,9 @@ async function main(): Promise<void> {
     show("language", scored.language ?? "(not reported)");
   } else {
     console.log("   ✖ ABSENT on every frame — the low-confidence reprompt in Q4 has no input.");
-    console.log("     Either Flux stopped sending `words[].confidence`, or toTranscript reads it wrong.");
+    console.log(
+      "     Either Flux stopped sending `words[].confidence`, or toTranscript reads it wrong.",
+    );
   }
 
   asr.close();

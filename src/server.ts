@@ -272,7 +272,7 @@ export function start(): ServerHandle {
     radio = new RadioCatalogue({
       apiBase: cfg.musicRadioApi,
       languages: SPEAKABLE.map((l) => l.code),
-      fallbackLanguage: cfg.musicFallbackLanguage as never,
+      fallbackLanguage: cfg.musicFallbackLanguage,
       perLanguage: cfg.musicStationsPerLanguage,
       secureOnly: cfg.musicSecureOnly,
       log,
@@ -474,8 +474,14 @@ export function start(): ServerHandle {
       contacts: contacts.length,
       transport: cfg.mailTransport,
       ...(cfg.mailTransport === "smtp"
-        ? { smtp_host: cfg.smtpHost ? "set" : "MISSING", smtp_from: cfg.smtpFrom ? "set" : "MISSING" }
-        : { mail_api_key: cfg.mailApiKey ? "set" : "MISSING", mail_from: cfg.mailFrom ? "set" : "MISSING" }),
+        ? {
+            smtp_host: cfg.smtpHost ? "set" : "MISSING",
+            smtp_from: cfg.smtpFrom ? "set" : "MISSING",
+          }
+        : {
+            mail_api_key: cfg.mailApiKey ? "set" : "MISSING",
+            mail_from: cfg.mailFrom ? "set" : "MISSING",
+          }),
       effect: "a call for help will be treated as an ordinary turn",
     });
   } else {

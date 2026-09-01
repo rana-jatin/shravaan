@@ -138,7 +138,7 @@ export function pickSongLike(
 }
 
 export function createPlayMusic(deps: MusicDeps): ToolSpec {
-  const fetcher = deps.fetch ?? (globalThis.fetch as unknown as HttpFetch);
+  const fetcher = deps.fetch ?? globalThis.fetch;
   const apiBase = deps.youtubeApiBase ?? "https://www.googleapis.com";
   const modes: MusicMode[] = deps.youtubeApiKey ? ["radio", "song"] : ["radio"];
 
@@ -156,8 +156,7 @@ export function createPlayMusic(deps: MusicDeps): ToolSpec {
       properties: {
         mode: {
           type: "string",
-          description:
-            "'radio' for a live station in their language, 'song' for a named track.",
+          description: "'radio' for a live station in their language, 'song' for a named track.",
           // Only what this deployment can serve. Without a YouTube key the
           // model never learns that songs were ever a possibility.
           enum: [...modes],
@@ -233,10 +232,7 @@ export function createPlayMusic(deps: MusicDeps): ToolSpec {
     };
   }
 
-  async function playSong(
-    query: string,
-    host: SessionToolHost,
-  ): Promise<Record<string, unknown>> {
+  async function playSong(query: string, host: SessionToolHost): Promise<Record<string, unknown>> {
     if (query === "") return { playing: false, reason: "no_query" };
 
     // EIGHT candidates, not one. `search` ranks on relevance alone, and for a
@@ -271,7 +267,8 @@ export function createPlayMusic(deps: MusicDeps): ToolSpec {
     const pick = pickSongLike(details.items ?? []);
     // Everything found was a Short or a live stream. Saying so is better than
     // playing an 18-second clip and calling it the song they asked for.
-    if (!pick) return { playing: false, reason: "no_playable_match", query, candidates: ids.length };
+    if (!pick)
+      return { playing: false, reason: "no_playable_match", query, candidates: ids.length };
 
     const { id: videoId, title, artist, seconds } = pick;
     host.playMedia({ source: "youtube", title, artist, video_id: videoId });

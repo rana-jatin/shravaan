@@ -13,7 +13,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { JsonContext, LanguageCode } from "../domain/types.ts";
-import { ToolRegistry, validateArgs } from "./registry.ts";
+import { type ToolRegistry, validateArgs } from "./registry.ts";
 import type { PendingCall, ProgressKey, SessionToolHost, ToolCall, ToolResult } from "./types.ts";
 
 export type ExecutorDeps = {

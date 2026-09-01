@@ -181,12 +181,7 @@ export type MemWriteEvent = {
   };
 };
 
-export type FactKind =
-  | "preference"
-  | "biographical"
-  | "relationship"
-  | "commitment"
-  | "aversion";
+export type FactKind = "preference" | "biographical" | "relationship" | "commitment" | "aversion";
 
 export type Fact = {
   id: string;
@@ -263,13 +258,7 @@ export type Episode = {
 // ---------------------------------------------------------------------------
 
 export type TurnPhase =
-  | "idle"
-  | "listening"
-  | "user_speaking"
-  | "thinking"
-  | "tool_wait"
-  | "speaking"
-  | "interrupted";
+  "idle" | "listening" | "user_speaking" | "thinking" | "tool_wait" | "speaking" | "interrupted";
 
 export type TurnEvent =
   | { type: "session_open" }

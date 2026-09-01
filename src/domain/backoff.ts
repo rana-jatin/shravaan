@@ -68,7 +68,11 @@ export function rawDelayFor(attempt: number, p: BackoffPolicy): number {
  * Full jitter: uniform over [0, raw]. Deliberately not "raw/2 + jitter" — the
  * whole population must be able to land early, or the herd stays a herd.
  */
-export function delayFor(attempt: number, p: BackoffPolicy, rand: () => number = Math.random): number {
+export function delayFor(
+  attempt: number,
+  p: BackoffPolicy,
+  rand: () => number = Math.random,
+): number {
   const raw = rawDelayFor(attempt, p);
   return p.jitter ? Math.floor(rand() * raw) : raw;
 }

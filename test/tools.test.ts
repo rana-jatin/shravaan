@@ -9,7 +9,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { FALLBACKS, FILLERS, PROGRESS, pendingCopyReview, resolveFallback, resolveFiller, resolveProgress } from "../src/copy/fillers.ts";
+import {
+  FALLBACKS,
+  FILLERS,
+  PROGRESS,
+  pendingCopyReview,
+  resolveFallback,
+  resolveFiller,
+  resolveProgress,
+} from "../src/copy/fillers.ts";
 import { SPEAKABLE, isSpeakable } from "../src/domain/languages.ts";
 import type { JsonContext } from "../src/domain/types.ts";
 import { ToolExecutor } from "../src/tools/executor.ts";
@@ -28,13 +36,20 @@ function registry(overrides: Partial<Parameters<ToolRegistry["register"]>[0]> = 
   return new ToolRegistry().register({
     name: "get_balance",
     description: "Look up the account balance",
-    parameters: { type: "object", properties: { account: { type: "string" } }, required: ["account"] },
+    parameters: {
+      type: "object",
+      properties: { account: { type: "string" } },
+      required: ["account"],
+    },
     handler: async () => ({ balance: 1200 }),
     ...overrides,
   });
 }
 
-function executor(reg: ToolRegistry, over: Partial<ConstructorParameters<typeof ToolExecutor>[0]> = {}) {
+function executor(
+  reg: ToolRegistry,
+  over: Partial<ConstructorParameters<typeof ToolExecutor>[0]> = {},
+) {
   const spoken: string[] = [];
   const pendingWrites: PendingCall[] = [];
   const cleared: string[] = [];
@@ -206,7 +221,11 @@ describe("execution and deadlines", () => {
   });
 
   it("converts a thrown handler into a spoken fallback", async () => {
-    const reg = registry({ handler: async () => { throw new Error("upstream 503"); } });
+    const reg = registry({
+      handler: async () => {
+        throw new Error("upstream 503");
+      },
+    });
     const { exec } = executor(reg);
     const r = await exec.execute(
       { call_id: "c1", name: "get_balance", args: { account: "main" } },
@@ -222,18 +241,38 @@ describe("pending entries are cleared on EVERY path", () => {
   const paths: Array<[string, () => ToolRegistry, Record<string, unknown>, JsonContext | null]> = [
     ["success", () => registry(), { account: "main" }, null],
     ["invalid args", () => registry(), {}, null],
-    ["thrown handler", () => registry({ handler: async () => { throw new Error("x"); } }), { account: "m" }, null],
-    ["timeout", () => registry({
-      deadline_ms: 40,
-      filler_threshold_ms: 10_000,
-      handler: (_a, c) => new Promise((_r, rej) => c.signal.addEventListener("abort", () => rej(new Error("t")))),
-    }), { account: "m" }, null],
+    [
+      "thrown handler",
+      () =>
+        registry({
+          handler: async () => {
+            throw new Error("x");
+          },
+        }),
+      { account: "m" },
+      null,
+    ],
+    [
+      "timeout",
+      () =>
+        registry({
+          deadline_ms: 40,
+          filler_threshold_ms: 10_000,
+          handler: (_a, c) =>
+            new Promise((_r, rej) => c.signal.addEventListener("abort", () => rej(new Error("t")))),
+        }),
+      { account: "m" },
+      null,
+    ],
   ];
 
   for (const [name, makeReg, args, ctx] of paths) {
     it(`clears after ${name}`, async () => {
       const { exec } = executor(makeReg());
-      await exec.execute({ call_id: "c1", name: "get_balance", args }, { language: "hi-IN", jsonContext: ctx });
+      await exec.execute(
+        { call_id: "c1", name: "get_balance", args },
+        { language: "hi-IN", jsonContext: ctx },
+      );
       // A stale entry makes the agent claim it is still working on something
       // it abandoned — worse than the original error.
       assert.equal(exec.pendingCount, 0, `pending leaked after ${name}`);
@@ -246,7 +285,10 @@ describe("pending entries are cleared on EVERY path", () => {
       handler: () => new Promise(() => {}),
     });
     const { exec } = executor(reg);
-    void exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "hi-IN", jsonContext: null });
+    void exec.execute(
+      { call_id: "c1", name: "get_balance", args: { account: "m" } },
+      { language: "hi-IN", jsonContext: null },
+    );
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(exec.pendingCount, 1);
 
@@ -259,7 +301,10 @@ describe("spoken fillers", () => {
   it("speaks only when a call actually runs slow", async () => {
     const fast = registry({ filler_threshold_ms: 200, handler: async () => ({ ok: 1 }) });
     const { exec, spoken } = executor(fast);
-    await exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "hi-IN", jsonContext: null });
+    await exec.execute(
+      { call_id: "c1", name: "get_balance", args: { account: "m" } },
+      { language: "hi-IN", jsonContext: null },
+    );
     assert.deepEqual(spoken, [], "a fast tool must not feel slow");
   });
 
@@ -267,10 +312,16 @@ describe("spoken fillers", () => {
     const slow = registry({
       filler_threshold_ms: 20,
       deadline_ms: 2000,
-      handler: async () => { await new Promise((r) => setTimeout(r, 120)); return { ok: 1 }; },
+      handler: async () => {
+        await new Promise((r) => setTimeout(r, 120));
+        return { ok: 1 };
+      },
     });
     const { exec, spoken } = executor(slow);
-    await exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "ta-IN", jsonContext: null });
+    await exec.execute(
+      { call_id: "c1", name: "get_balance", args: { account: "m" } },
+      { language: "ta-IN", jsonContext: null },
+    );
     assert.deepEqual(spoken, ["ta-IN"], "exactly one filler, in the right language");
   });
 
@@ -279,11 +330,17 @@ describe("spoken fillers", () => {
       filler_threshold_ms: 20,
       deadline_ms: 2000,
       progress_key: "progress.weather",
-      handler: async () => { await new Promise((r) => setTimeout(r, 120)); return { ok: 1 }; },
+      handler: async () => {
+        await new Promise((r) => setTimeout(r, 120));
+        return { ok: 1 };
+      },
     });
     const keys: Array<string | undefined> = [];
     const { exec } = executor(slow, { speakFiller: (_l, k) => void keys.push(k) });
-    await exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "hi-IN", jsonContext: null });
+    await exec.execute(
+      { call_id: "c1", name: "get_balance", args: { account: "m" } },
+      { language: "hi-IN", jsonContext: null },
+    );
     assert.deepEqual(keys, ["progress.weather"]);
   });
 
@@ -293,21 +350,29 @@ describe("spoken fillers", () => {
     // both. Collapsing them into one spoken line is the orchestrator's job:
     // without it the user hears "One moment." "Let me check." back to back,
     // which sounds like a stutter rather than patience.
-    const slow = async () => { await new Promise((r) => setTimeout(r, 120)); return { ok: 1 }; };
-    const reg = registry({ filler_threshold_ms: 20, deadline_ms: 2000, handler: slow })
-      .register({
-        name: "other_tool",
-        description: "second slow tool",
-        parameters: { type: "object", properties: {}, required: [] },
-        filler_threshold_ms: 20,
-        deadline_ms: 2000,
-        handler: slow,
-      });
+    const slow = async () => {
+      await new Promise((r) => setTimeout(r, 120));
+      return { ok: 1 };
+    };
+    const reg = registry({ filler_threshold_ms: 20, deadline_ms: 2000, handler: slow }).register({
+      name: "other_tool",
+      description: "second slow tool",
+      parameters: { type: "object", properties: {}, required: [] },
+      filler_threshold_ms: 20,
+      deadline_ms: 2000,
+      handler: slow,
+    });
     const { exec, spoken } = executor(reg);
 
     await Promise.all([
-      exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "hi-IN", jsonContext: null }),
-      exec.execute({ call_id: "c2", name: "other_tool", args: {} }, { language: "hi-IN", jsonContext: null }),
+      exec.execute(
+        { call_id: "c1", name: "get_balance", args: { account: "m" } },
+        { language: "hi-IN", jsonContext: null },
+      ),
+      exec.execute(
+        { call_id: "c2", name: "other_tool", args: {} },
+        { language: "hi-IN", jsonContext: null },
+      ),
     ]);
     assert.equal(spoken.length, 2, "executor announces per call; the session dedupes per round");
   });
@@ -330,16 +395,25 @@ describe("context invalidation", () => {
   it("does not invalidate for a read-only tool", async () => {
     let invalidated = 0;
     const { exec } = executor(registry(), { invalidateContext: async () => void invalidated++ });
-    await exec.execute({ call_id: "c1", name: "get_balance", args: { account: "m" } }, { language: "hi-IN", jsonContext: null });
+    await exec.execute(
+      { call_id: "c1", name: "get_balance", args: { account: "m" } },
+      { language: "hi-IN", jsonContext: null },
+    );
     assert.equal(invalidated, 0);
   });
 
   it("survives a store that is failing", async () => {
     // A store outage must not break a tool call that otherwise succeeded.
     const { exec } = executor(registry({ mutates_context: true }), {
-      setPending: async () => { throw new Error("redis down"); },
-      clearPending: async () => { throw new Error("redis down"); },
-      invalidateContext: async () => { throw new Error("redis down"); },
+      setPending: async () => {
+        throw new Error("redis down");
+      },
+      clearPending: async () => {
+        throw new Error("redis down");
+      },
+      invalidateContext: async () => {
+        throw new Error("redis down");
+      },
     });
     const r = await exec.execute(
       { call_id: "c1", name: "get_balance", args: { account: "m" } },
@@ -355,13 +429,17 @@ describe("filler and fallback copy", () => {
     for (const lang of SPEAKABLE) {
       assert.ok(FILLERS[lang.code], `no filler for ${lang.code}`);
       for (const key of Object.keys(FALLBACKS)) {
-        assert.ok(FALLBACKS[key as keyof typeof FALLBACKS][lang.code], `no ${key} for ${lang.code}`);
+        assert.ok(
+          FALLBACKS[key as keyof typeof FALLBACKS][lang.code],
+          `no ${key} for ${lang.code}`,
+        );
       }
     }
   });
 
   it("never holds copy for an unspeakable language", () => {
-    for (const code of Object.keys(FILLERS)) assert.ok(isSpeakable(code), `filler for unspeakable ${code}`);
+    for (const code of Object.keys(FILLERS))
+      assert.ok(isSpeakable(code), `filler for unspeakable ${code}`);
   });
 
   it("rotates fillers so waiting does not sound like a loop", () => {
@@ -384,10 +462,7 @@ describe("filler and fallback copy", () => {
   it("covers every speakable language with progress copy too", () => {
     for (const lang of SPEAKABLE) {
       for (const key of Object.keys(PROGRESS)) {
-        assert.ok(
-          PROGRESS[key as keyof typeof PROGRESS][lang.code],
-          `no ${key} for ${lang.code}`,
-        );
+        assert.ok(PROGRESS[key as keyof typeof PROGRESS][lang.code], `no ${key} for ${lang.code}`);
       }
     }
   });

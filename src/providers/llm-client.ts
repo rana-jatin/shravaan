@@ -51,10 +51,7 @@ export type StreamChunk =
  * mid-conversation.
  */
 export type ToolChoice =
-  | "auto"
-  | "none"
-  | "required"
-  | { type: "function"; function: { name: string } };
+  "auto" | "none" | "required" | { type: "function"; function: { name: string } };
 
 export type ToolSchema = {
   type: "function";

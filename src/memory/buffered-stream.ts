@@ -161,10 +161,13 @@ export class BufferedMemWriteStream implements MemWriteStream {
     if (this.#retryTimer || this.#closed) return;
     const delayMs = delayFor(Math.min(this.#attempt, this.#policy.maxAttempts), this.#policy);
     this.#attempt += 1;
-    this.#retryTimer = setTimeout(() => {
-      this.#retryTimer = null;
-      void this.flush();
-    }, Math.max(delayMs, 100));
+    this.#retryTimer = setTimeout(
+      () => {
+        this.#retryTimer = null;
+        void this.flush();
+      },
+      Math.max(delayMs, 100),
+    );
     // A retry loop must never be the reason a process refuses to exit.
     this.#retryTimer.unref?.();
   }

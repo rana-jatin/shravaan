@@ -47,12 +47,16 @@ export type CalendarWindow = keyof typeof WINDOWS;
  */
 export type CalendarSource = {
   label: string;
-  read(from: Date, to: Date, ctx: { timezone: string; signal: AbortSignal }): Promise<CalendarEvent[]>;
+  read(
+    from: Date,
+    to: Date,
+    ctx: { timezone: string; signal: AbortSignal },
+  ): Promise<CalendarEvent[]>;
 };
 
 /** A calendar reached by its public/secret iCal URL. No credential. */
 export function icalSource(label: string, url: string, fetcher?: HttpFetch): CalendarSource {
-  const f = fetcher ?? (globalThis.fetch as unknown as HttpFetch);
+  const f = fetcher ?? globalThis.fetch;
   return {
     label,
     async read(from, to, ctx) {

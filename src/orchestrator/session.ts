@@ -19,7 +19,13 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "../config/env.ts";
 import { resolveCopy } from "../copy/refusals.ts";
 import { resolveFallback, resolveFiller, resolveProgress } from "../copy/fillers.ts";
-import { blocksLlm, endsSession, gate1PreConnect, gate2FirstDetection, gate3Switch } from "../domain/gate.ts";
+import {
+  blocksLlm,
+  endsSession,
+  gate1PreConnect,
+  gate2FirstDetection,
+  gate3Switch,
+} from "../domain/gate.ts";
 import { ClauseChunker } from "../domain/clause-chunker.ts";
 import { EchoGuard } from "../domain/echo-guard.ts";
 import { isSpeakable, normalizeLanguage } from "../domain/languages.ts";
@@ -30,7 +36,18 @@ import { DEGRADATIONS, DegradationLedger, type DegradationKey } from "../domain/
 import { standbyFor } from "../domain/asr-failover.ts";
 import { moodTrend } from "../domain/care-signals.ts";
 import { ASR_STABLE_MS, reopenDecision } from "../domain/asr-reopen.ts";
-import type { FactKind, GateDecision, JsonContext, LanguageCode, MemWriteEvent, MessageKey, Profile, SessionState, Turn, TurnPhase } from "../domain/types.ts";
+import type {
+  FactKind,
+  GateDecision,
+  JsonContext,
+  LanguageCode,
+  MemWriteEvent,
+  MessageKey,
+  Profile,
+  SessionState,
+  Turn,
+  TurnPhase,
+} from "../domain/types.ts";
 import type { LongTermStore } from "../memory/long-term-store.ts";
 import type { AsrClient } from "../providers/asr-client.ts";
 import {
@@ -55,7 +72,7 @@ import type { TtsClient } from "../providers/tts-client.ts";
 import type { HoldingAudio } from "../audio/holding-audio.ts";
 import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
 import type { MemWriteStream } from "../memory/stream.ts";
-import { isStopRequest, matchMediaIntent } from "../copy/stop-intent.ts";
+import { matchMediaIntent } from "../copy/stop-intent.ts";
 import { EMERGENCY_ACK, EMERGENCY_FAILED, matchEmergency } from "../copy/emergency-intent.ts";
 import type { EmergencyAlerter } from "../tools/emergency.ts";
 import { ToolExecutor } from "../tools/executor.ts";
@@ -396,7 +413,11 @@ export class Session {
       requestLanguage: (raw: string) => {
         const code = normalizeLanguage(raw);
         if (!code) {
-          return { switched: false, language: this.#state.language, reason: "unknown_language" as const };
+          return {
+            switched: false,
+            language: this.#state.language,
+            reason: "unknown_language" as const,
+          };
         }
         if (code === this.#state.language) {
           return { switched: false, language: code, reason: "already_speaking_it" as const };
@@ -409,7 +430,11 @@ export class Session {
             this.#speak(resolveCopy("gate.switch_declined", this.#state.language).text);
           }
           this.#log("info", "language switch declined via tool", { requested: code });
-          return { switched: false, language: this.#state.language, reason: "not_speakable" as const };
+          return {
+            switched: false,
+            language: this.#state.language,
+            reason: "not_speakable" as const,
+          };
         }
         this.#setLanguage(code, "user_stated");
         return { switched: true, language: code };
@@ -477,8 +502,7 @@ export class Session {
         return moodTrend(episodes);
       },
 
-      timezone: () =>
-        this.#jsonContext?.identity.timezone ?? this.#d.cfg.defaultTimezone,
+      timezone: () => this.#jsonContext?.identity.timezone ?? this.#d.cfg.defaultTimezone,
 
       playMedia: (req) => {
         // Replaces whatever was playing. Two stations at once is the one
@@ -526,7 +550,12 @@ export class Session {
     const next = Math.max(15, Math.min(100, before + (direction === "louder" ? 20 : -20)));
     this.#media.volume = next;
     this.#d.device.sendControl({ type: "set_media_volume", volume: next });
-    this.#log("info", "media volume", { direction, before, after: next, at_limit: next === before });
+    this.#log("info", "media volume", {
+      direction,
+      before,
+      after: next,
+      at_limit: next === before,
+    });
   }
 
   /** True while a station or track is playing on the device. */
@@ -819,9 +848,7 @@ export class Session {
     }
 
     if (decision.action === "lose_hearing") {
-      this.#loseHearing(
-        standby.available ? reason : `${reason} (no standby: ${standby.detail})`,
-      );
+      this.#loseHearing(standby.available ? reason : `${reason} (no standby: ${standby.detail})`);
       return;
     }
 
@@ -1149,7 +1176,12 @@ export class Session {
       );
     }
     if (p.recent_episodes.length > 0) {
-      parts.push(`Recently:\n${p.recent_episodes.slice(0, 3).map((e) => `- ${e.summary}`).join("\n")}`);
+      parts.push(
+        `Recently:\n${p.recent_episodes
+          .slice(0, 3)
+          .map((e) => `- ${e.summary}`)
+          .join("\n")}`,
+      );
     }
     if (parts.length === 0) return "";
 
@@ -1739,7 +1771,10 @@ export class Session {
    * `respond_in` is guaranteed speakable by resolveRespondIn().
    */
   async #refuse(decision: GateDecision): Promise<void> {
-    const copy = resolveCopy(decision.message_key ?? "gate.unsupported_language", decision.respond_in);
+    const copy = resolveCopy(
+      decision.message_key ?? "gate.unsupported_language",
+      decision.respond_in,
+    );
     this.#log("info", "refusing", {
       gate: decision.gate,
       verdict: decision.verdict.status,
@@ -1798,9 +1833,7 @@ export class Session {
       tid: this.#state.turn_no,
       turn_count: this.#state.turn_no,
       language: this.#state.language,
-      duration_s: Math.round(
-        (Date.now() - Date.parse(this.#state.started_at)) / 1000,
-      ),
+      duration_s: Math.round((Date.now() - Date.parse(this.#state.started_at)) / 1000),
     });
     this.#d.device.sendControl({ type: "session_closed", reason });
     this.#d.device.close(reason);

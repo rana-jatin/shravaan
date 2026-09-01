@@ -87,7 +87,10 @@ export type RadioCatalogueDeps = {
   perLanguage?: number;
   /** Drop plain-http streams. A device fetching them is an injection surface. */
   secureOnly?: boolean;
-  fetch?: (url: string, init?: { signal?: AbortSignal }) => Promise<{
+  fetch?: (
+    url: string,
+    init?: { signal?: AbortSignal },
+  ) => Promise<{
     ok: boolean;
     status: number;
     text(): Promise<string>;
@@ -123,11 +126,11 @@ export class RadioCatalogue {
    * far better than silence.
    */
   async refresh(signal?: AbortSignal): Promise<void> {
-    const fetcher = this.#d.fetch ?? (globalThis.fetch as RadioCatalogueDeps["fetch"])!;
+    const fetcher = this.#d.fetch ?? globalThis.fetch;
 
     for (const language of this.#d.languages) {
       // A code outside the eleven has no directory name and cannot be searched.
-      const name = LANGUAGE_NAMES[language] as string | undefined;
+      const name = LANGUAGE_NAMES[language];
       if (name === undefined) {
         this.#d.log?.("warn", "no radio directory name for language", { language });
         continue;

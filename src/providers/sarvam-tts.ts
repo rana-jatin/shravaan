@@ -105,7 +105,9 @@ export class SarvamTts extends EventEmitter<TtsEvents> implements TtsClient {
       this.emit("open");
     });
     ws.on("message", (raw) => this.#onMessage(raw));
-    ws.on("error", (err) => this.emit("error", err instanceof Error ? err : new Error(String(err))));
+    ws.on("error", (err) =>
+      this.emit("error", err instanceof Error ? err : new Error(String(err))),
+    );
     ws.on("close", (code, reason) => {
       this.#stopKeepalive();
       this.#configured = false;
@@ -276,9 +278,10 @@ export class SarvamTts extends EventEmitter<TtsEvents> implements TtsClient {
     // would have been dropped too. Look inside `data` first, and keep the flat
     // reads as a fallback. docs/05-open-questions.md Q12
     const type = String(msg["type"] ?? "");
-    const data = (typeof msg["data"] === "object" && msg["data"] !== null
-      ? (msg["data"] as Record<string, unknown>)
-      : {}) as Record<string, unknown>;
+    const data =
+      typeof msg["data"] === "object" && msg["data"] !== null
+        ? (msg["data"] as Record<string, unknown>)
+        : {};
 
     if (type === "audio" || data["audio"] !== undefined || typeof msg["audio"] === "string") {
       const b64 = data["audio"] ?? msg["audio"];

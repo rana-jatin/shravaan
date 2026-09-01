@@ -173,5 +173,7 @@ function clamp01(v: unknown, fallback: number): number {
 }
 
 function strArray(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : [];
+  return Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "")
+    : [];
 }

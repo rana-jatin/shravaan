@@ -96,9 +96,7 @@ export class DeepgramAsr extends EventEmitter<AsrEvents> implements AsrClient {
     ws.on("error", (err) =>
       this.emit("error", err instanceof Error ? err : new Error(String(err))),
     );
-    ws.on("close", (code, reason) =>
-      this.emit("close", { code, reason: reason.toString() }),
-    );
+    ws.on("close", (code, reason) => this.emit("close", { code, reason: reason.toString() }));
   }
 
   #onMessage(raw: WebSocket.RawData): void {
@@ -154,7 +152,10 @@ export class DeepgramAsr extends EventEmitter<AsrEvents> implements AsrClient {
       }
 
       case "Error":
-        this.emit("error", new Error(String(msg["description"] ?? msg["message"] ?? "Deepgram error")));
+        this.emit(
+          "error",
+          new Error(String(msg["description"] ?? msg["message"] ?? "Deepgram error")),
+        );
         return;
 
       default:

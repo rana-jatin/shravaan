@@ -135,10 +135,7 @@ export function gate2FirstDetection(args: {
 export function gate3Switch(args: {
   detected: string | null | undefined;
   confidence?: number | undefined;
-  state: Pick<
-    SessionState,
-    "language" | "switch_declined_acknowledged" | "pending_switch"
-  >;
+  state: Pick<SessionState, "language" | "switch_declined_acknowledged" | "pending_switch">;
   profileLanguage?: LanguageCode | undefined;
 }): {
   decision: GateDecision;

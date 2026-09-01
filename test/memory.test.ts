@@ -20,7 +20,11 @@ import { MemorySessionStore } from "../src/store/memory-store.ts";
 
 const store = () => new InMemoryLongTermStore(new HashingEmbedder());
 
-const draft = (uid: string, text: string, over: Partial<Parameters<InMemoryLongTermStore["putFact"]>[0]> = {}) => ({
+const draft = (
+  uid: string,
+  text: string,
+  over: Partial<Parameters<InMemoryLongTermStore["putFact"]>[0]> = {},
+) => ({
   uid,
   text,
   kind: "biographical" as const,
@@ -89,7 +93,11 @@ describe("fact store: soft delete, always", () => {
     await s.softDelete(f.id, "user_requested");
     const first = (await s.getFact(f.id))!.deleted_at;
     await s.softDelete(f.id, "low_confidence");
-    assert.equal((await s.getFact(f.id))!.deleted_at, first, "must not overwrite the original deletion");
+    assert.equal(
+      (await s.getFact(f.id))!.deleted_at,
+      first,
+      "must not overwrite the original deletion",
+    );
   });
 });
 
@@ -139,7 +147,14 @@ describe("distillation parsing", () => {
   it("extracts facts from a well-formed response", () => {
     const d = parseDistillation(
       JSON.stringify({
-        facts: [{ text: "They have a daughter called Aanya", kind: "relationship", salience: 0.9, confidence: 0.95 }],
+        facts: [
+          {
+            text: "They have a daughter called Aanya",
+            kind: "relationship",
+            salience: 0.9,
+            confidence: 0.95,
+          },
+        ],
         summary: "Talked about family.",
         topics: ["family"],
         open_threads: ["Wanted to plan Aanya's birthday"],
@@ -153,7 +168,9 @@ describe("distillation parsing", () => {
   });
 
   it("tolerates prose wrapped around the JSON", () => {
-    const d = parseDistillation('Sure! Here you go:\n{"facts":[],"summary":"nothing"}\nHope that helps.');
+    const d = parseDistillation(
+      'Sure! Here you go:\n{"facts":[],"summary":"nothing"}\nHope that helps.',
+    );
     assert.equal(d.summary, "nothing");
   });
 
@@ -224,7 +241,9 @@ function makeWorker(distillation: Distillation) {
 describe("memory worker", () => {
   it("writes distilled facts and refreshes the profile", async () => {
     const { stream, longTerm, sessions, worker } = makeWorker({
-      facts: [{ text: "They prefer morning calls", kind: "preference", salience: 0.8, confidence: 0.9 }],
+      facts: [
+        { text: "They prefer morning calls", kind: "preference", salience: 0.8, confidence: 0.9 },
+      ],
       summary: "Chatted about scheduling.",
       topics: ["scheduling"],
       open_threads: [],
@@ -333,7 +352,7 @@ describe("memory worker", () => {
     const live = await longTerm.listFacts("u1");
     assert.equal(live.length, 1);
     assert.equal(live[0]?.text, "They live in Bengaluru");
-    assert.equal((await longTerm.getFact(original.id))!.superseded_by, live[0]!.id);
+    assert.equal((await longTerm.getFact(original.id))!.superseded_by, live[0].id);
   });
 
   it("writes an episode only when the session closes", async () => {
@@ -346,7 +365,11 @@ describe("memory worker", () => {
     });
 
     await stream.append(event({ event_id: "t1" }));
-    assert.equal((await worker.runOnce()).episodesWritten, 0, "a mid-session turn is not an episode");
+    assert.equal(
+      (await worker.runOnce()).episodesWritten,
+      0,
+      "a mid-session turn is not an episode",
+    );
 
     await stream.append(event({ event_id: "close", kind: "session_closed", turn_count: 4 }));
     const res = await worker.runOnce();
@@ -391,7 +414,10 @@ describe("profile building", () => {
 
   it("ranks facts by decayed salience, not raw", async () => {
     const now = new Date("2026-06-01T00:00:00Z");
-    const s = new InMemoryLongTermStore(new HashingEmbedder(), () => new Date("2026-01-01T00:00:00Z"));
+    const s = new InMemoryLongTermStore(
+      new HashingEmbedder(),
+      () => new Date("2026-01-01T00:00:00Z"),
+    );
     await s.putFact(draft("u1", "Stale but once important", { salience: 0.95 }));
 
     const fresh = new InMemoryLongTermStore(new HashingEmbedder(), () => now);

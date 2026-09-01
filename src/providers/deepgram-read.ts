@@ -141,7 +141,10 @@ export class DeepgramRead implements TextAnalyser {
       // Their error body is `{err_code, err_msg, request_id}`. Surface err_msg
       // when it is there — "Summarization v2 not supported for non-English
       // languages" tells you what went wrong; "HTTP 400" does not.
-      throw new DeepgramReadError(res.status, `/v1/read returned HTTP ${res.status}: ${detail(raw)}`);
+      throw new DeepgramReadError(
+        res.status,
+        `/v1/read returned HTTP ${res.status}: ${detail(raw)}`,
+      );
     }
 
     try {

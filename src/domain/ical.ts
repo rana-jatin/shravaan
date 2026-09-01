@@ -216,7 +216,11 @@ function parseRule(rrule: string): Rule | null {
     interval: Math.max(1, Number(rules.get("INTERVAL") ?? 1) || 1),
     count: rules.get("COUNT") ? Number(rules.get("COUNT")) : null,
     until: untilRaw ? (parseDate(untilRaw)?.date ?? null) : null,
-    byDay: rules.get("BYDAY")?.split(",").map((d) => d.trim().slice(-2).toUpperCase()) ?? null,
+    byDay:
+      rules
+        .get("BYDAY")
+        ?.split(",")
+        .map((d) => d.trim().slice(-2).toUpperCase()) ?? null,
     wkst: wkst === -1 ? 1 : wkst,
   };
 }

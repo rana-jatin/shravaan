@@ -23,7 +23,7 @@ import type {
 } from "../src/providers/llm-client.ts";
 import type { TtsClient, TtsEvents, TtsOptions } from "../src/providers/tts-client.ts";
 import { Session, type DeviceLink, type SessionDeps } from "../src/orchestrator/session.ts";
-import type { SessionToolHost } from "../src/tools/types.ts";
+import type { SessionToolHost, ToolDefinition } from "../src/tools/types.ts";
 
 /** A SessionToolHost that records rather than acts. */
 export function fakeHost(over: Partial<SessionToolHost> = {}): SessionToolHost {
@@ -45,9 +45,9 @@ export function fakeHost(over: Partial<SessionToolHost> = {}): SessionToolHost {
 }
 
 /** An invocation context for calling a tool handler directly. */
-export function invocation(over: Partial<Parameters<
-  NonNullable<import("../src/tools/types.ts").ToolDefinition["handler"]>
->[1]> = {}) {
+export function invocation(
+  over: Partial<Parameters<NonNullable<ToolDefinition["handler"]>>[1]> = {},
+) {
   return {
     uid: "u1",
     sid: "s1",
@@ -476,10 +476,7 @@ export async function waitFor(
  * only the four members it actually touches are implemented — `ok`, `status`,
  * `json` and `text`. Anything else would be scaffolding nobody reads.
  */
-export function jsonFetch(
-  body: unknown,
-  status = 200,
-): typeof globalThis.fetch {
+export function jsonFetch(body: unknown, status = 200): typeof globalThis.fetch {
   const calls: string[] = [];
   const f = (async (input: unknown) => {
     calls.push(String(input));

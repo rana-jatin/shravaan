@@ -93,7 +93,10 @@ async function main(): Promise<void> {
 
   await probe(2, "sentiment shape — results.sentiments.{segments,average}", async () => {
     const body = await read.analyse({ text: SAMPLE, sentiment: true });
-    const signals = toCareSignals(body, { intentConfidence: 0, analysedAt: new Date().toISOString() });
+    const signals = toCareSignals(body, {
+      intentConfidence: 0,
+      analysedAt: new Date().toISOString(),
+    });
     if (!signals?.sentiment) {
       console.log("   ✖ MAPPED TO NOTHING — the documented path did not resolve.");
       console.log("     This is the silent failure. Inspect with --raw before shipping.");
@@ -112,7 +115,10 @@ async function main(): Promise<void> {
       customIntents: [...CARE_INTENTS],
       customIntentMode: "strict",
     });
-    const signals = toCareSignals(body, { intentConfidence: 0, analysedAt: new Date().toISOString() });
+    const signals = toCareSignals(body, {
+      intentConfidence: 0,
+      analysedAt: new Date().toISOString(),
+    });
     const found = signals?.flagged_intents ?? [];
 
     console.log(found.length > 0 ? "   ✔ intents returned" : "   ✖ no intents in the response");
@@ -129,18 +135,25 @@ async function main(): Promise<void> {
     if (RAW) console.dir(body, { depth: null });
   });
 
-  await probe(4, "what a Hindi transcript actually does — 400, or a confident wrong answer?", async () => {
-    const body = await read.analyse({ text: HINDI_SAMPLE, sentiment: true, intents: true });
-    const signals = toCareSignals(body, { intentConfidence: 0, analysedAt: new Date().toISOString() });
+  await probe(
+    4,
+    "what a Hindi transcript actually does — 400, or a confident wrong answer?",
+    async () => {
+      const body = await read.analyse({ text: HINDI_SAMPLE, sentiment: true, intents: true });
+      const signals = toCareSignals(body, {
+        intentConfidence: 0,
+        analysedAt: new Date().toISOString(),
+      });
 
-    // A 400 here would be the kind answer and lands in the catch above. Reaching
-    // this line means it returned something — which is exactly why the language
-    // gate in care-signals.ts refuses BEFORE the call rather than trusting them
-    // to refuse for us.
-    console.log("   ⚠ accepted a non-English input rather than rejecting it");
-    show("mapped", signals ?? "nothing");
-    if (RAW) console.dir(body, { depth: null });
-  });
+      // A 400 here would be the kind answer and lands in the catch above. Reaching
+      // this line means it returned something — which is exactly why the language
+      // gate in care-signals.ts refuses BEFORE the call rather than trusting them
+      // to refuse for us.
+      console.log("   ⚠ accepted a non-English input rather than rejecting it");
+      show("mapped", signals ?? "nothing");
+      if (RAW) console.dir(body, { depth: null });
+    },
+  );
 
   console.log("\nDone. Anything marked ✖ or ⚠ contradicts a claim in the source comments.");
 }

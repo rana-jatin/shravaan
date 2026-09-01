@@ -17,12 +17,7 @@ import { describe, it } from "node:test";
 
 import { parseCalendar, unfold } from "../src/domain/ical.ts";
 import { GoogleCalendar } from "../src/providers/google-calendar.ts";
-import {
-  createAddAppointment,
-  createGetAppointments,
-  googleSource,
-  icalSource,
-} from "../src/tools/calendar.ts";
+import { createGetAppointments, googleSource, icalSource } from "../src/tools/calendar.ts";
 import type { HttpFetch } from "../src/tools/builtin.ts";
 import { ToolRegistry, toSchema } from "../src/tools/registry.ts";
 import { fakeHost, invocation, jsonFetch } from "./helpers.ts";
@@ -53,7 +48,12 @@ describe("iCal line folding", () => {
 describe("parsing a calendar", () => {
   it("reads an all-day event, as Google actually publishes them", () => {
     const ics = wrap(
-      event(["DTSTART;VALUE=DATE:20260904", "DTEND;VALUE=DATE:20260905", "SUMMARY:Janmashtami", "UID:a"]),
+      event([
+        "DTSTART;VALUE=DATE:20260904",
+        "DTEND;VALUE=DATE:20260905",
+        "SUMMARY:Janmashtami",
+        "UID:a",
+      ]),
     );
     const [e] = parseCalendar(ics, FROM, TO);
 
@@ -85,7 +85,12 @@ describe("parsing a calendar", () => {
 
   it("skips a CANCELLED event — it must never be read out", () => {
     const ics = wrap(
-      event(["DTSTART;VALUE=DATE:20260904", "SUMMARY:Cancelled visit", "STATUS:CANCELLED", "UID:c"]),
+      event([
+        "DTSTART;VALUE=DATE:20260904",
+        "SUMMARY:Cancelled visit",
+        "STATUS:CANCELLED",
+        "UID:c",
+      ]),
       event(["DTSTART;VALUE=DATE:20260905", "SUMMARY:Real visit", "UID:d"]),
     );
     const out = parseCalendar(ics, FROM, TO);
@@ -103,26 +108,27 @@ describe("parsing a calendar", () => {
       event(["DTSTART;VALUE=DATE:20260920", "SUMMARY:Later", "UID:f"]),
       event(["DTSTART;VALUE=DATE:20260903", "SUMMARY:Sooner", "UID:g"]),
     );
-    assert.deepEqual(parseCalendar(ics, FROM, TO).map((e) => e.summary), ["Sooner", "Later"]);
+    assert.deepEqual(
+      parseCalendar(ics, FROM, TO).map((e) => e.summary),
+      ["Sooner", "Later"],
+    );
   });
 
   it("survives junk without throwing", () => {
     assert.deepEqual(parseCalendar("", FROM, TO), []);
     assert.deepEqual(parseCalendar("<html>not a calendar</html>", FROM, TO), []);
     // No SUMMARY: nothing to say, so nothing to report.
-    assert.deepEqual(parseCalendar(wrap(event(["DTSTART;VALUE=DATE:20260904", "UID:h"])), FROM, TO), []);
+    assert.deepEqual(
+      parseCalendar(wrap(event(["DTSTART;VALUE=DATE:20260904", "UID:h"])), FROM, TO),
+      [],
+    );
   });
 });
 
 describe("recurring events — where a dropped rule reports a free day", () => {
   it("expands a WEEKLY appointment across the window", () => {
     const ics = wrap(
-      event([
-        "DTSTART:20260901T100000",
-        "SUMMARY:Physiotherapy",
-        "RRULE:FREQ=WEEKLY",
-        "UID:w",
-      ]),
+      event(["DTSTART:20260901T100000", "SUMMARY:Physiotherapy", "RRULE:FREQ=WEEKLY", "UID:w"]),
     );
     const out = parseCalendar(ics, FROM, TO);
     assert.ok(out.length >= 4, `expected weekly occurrences, got ${out.length}`);
@@ -160,7 +166,12 @@ describe("recurring events — where a dropped rule reports a free day", () => {
 
   it("honours INTERVAL", () => {
     const ics = wrap(
-      event(["DTSTART:20260901T100000", "SUMMARY:Fortnightly", "RRULE:FREQ=WEEKLY;INTERVAL=2", "UID:i"]),
+      event([
+        "DTSTART:20260901T100000",
+        "SUMMARY:Fortnightly",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2",
+        "UID:i",
+      ]),
     );
     const out = parseCalendar(ics, FROM, TO);
     assert.ok(out.length <= 3, `every other week, got ${out.length}`);
@@ -168,7 +179,12 @@ describe("recurring events — where a dropped rule reports a free day", () => {
 
   it("expands a YEARLY birthday into the right year", () => {
     const ics = wrap(
-      event(["DTSTART;VALUE=DATE:20200910", "SUMMARY:Amma's birthday", "RRULE:FREQ=YEARLY", "UID:b1"]),
+      event([
+        "DTSTART;VALUE=DATE:20200910",
+        "SUMMARY:Amma's birthday",
+        "RRULE:FREQ=YEARLY",
+        "UID:b1",
+      ]),
     );
     const out = parseCalendar(ics, FROM, TO);
     assert.equal(out.length, 1);
@@ -177,7 +193,9 @@ describe("recurring events — where a dropped rule reports a free day", () => {
   });
 
   it("cannot be made to spin by an endless rule", () => {
-    const ics = wrap(event(["DTSTART:20200101T100000", "SUMMARY:Daily", "RRULE:FREQ=DAILY", "UID:d1"]));
+    const ics = wrap(
+      event(["DTSTART:20200101T100000", "SUMMARY:Daily", "RRULE:FREQ=DAILY", "UID:d1"]),
+    );
     const out = parseCalendar(ics, FROM, TO);
     assert.ok(out.length > 0 && out.length < 100);
   });
@@ -200,7 +218,7 @@ describe("get_appointments", () => {
   const ctx = () => invocation({ host: fakeHost({ timezone: () => "Asia/Kolkata" }) });
 
   it("says plainly when there is nothing on", async () => {
-    const out = await tool(wrap()).handler!({ window: "today" }, ctx());
+    const out = await tool(wrap()).handler({ window: "today" }, ctx());
     assert.equal(out["found"], 0);
     assert.equal(out["reason"], "nothing_scheduled");
   });
@@ -209,7 +227,7 @@ describe("get_appointments", () => {
     // The critical case: reporting a free day to someone who has a hospital
     // appointment is far worse than admitting the calendar is unreachable.
     await assert.rejects(
-      () => tool("", 503).handler!({ window: "today" }, ctx()),
+      () => tool("", 503).handler({ window: "today" }, ctx()),
       /every calendar feed failed/,
     );
   });
@@ -223,7 +241,7 @@ describe("get_appointments", () => {
         icalSource("bad", "https://bad.test/b.ics", bad),
       ],
     });
-    const out = await spec.handler!({ window: "week" }, ctx());
+    const out = await spec.handler({ window: "week" }, ctx());
 
     // So the model can say "though I couldn't reach one of your calendars"
     // rather than implying the day is free.
@@ -278,7 +296,7 @@ describe("get_appointments", () => {
         googleSource("api", "primary", api),
       ],
     });
-    const out = await spec.handler!({ window: "week" }, ctx());
+    const out = await spec.handler({ window: "week" }, ctx());
     const names = (out["appointments"] as { what: string }[]).map((a) => a.what);
     assert.ok(names.includes("From the API"), names.join(", "));
     assert.ok(names.includes("From the feed"), names.join(", "));
@@ -315,7 +333,12 @@ describe("a long-running recurrence still reaches today", () => {
   it("does not resurrect a COUNT-limited rule that already finished", () => {
     // Skipping ahead must not reset the count — six sessions in 2020 are over.
     const ics = wrap(
-      event(["DTSTART:20200101T100000", "SUMMARY:Six sessions", "RRULE:FREQ=WEEKLY;COUNT=6", "UID:c6"]),
+      event([
+        "DTSTART:20200101T100000",
+        "SUMMARY:Six sessions",
+        "RRULE:FREQ=WEEKLY;COUNT=6",
+        "UID:c6",
+      ]),
     );
     assert.deepEqual(parseCalendar(ics, FROM, TO), []);
   });
@@ -348,7 +371,12 @@ describe("INTERVAL on a BYDAY rule", () => {
     // Day-stepping for BYDAY dropped INTERVAL entirely, so every other Tuesday
     // was read out as every Tuesday — inventing appointments, not dropping them.
     const ics = wrap(
-      event(["DTSTART:20260901T100000", "SUMMARY:Physio", "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU", "UID:f1"]),
+      event([
+        "DTSTART:20260901T100000",
+        "SUMMARY:Physio",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU",
+        "UID:f1",
+      ]),
     );
     const days = parseCalendar(ics, FROM, TO).map((e) => e.start.getDate());
     assert.deepEqual(days, [1, 15, 29]);
@@ -358,7 +386,12 @@ describe("INTERVAL on a BYDAY rule", () => {
     // DTSTART is a Wednesday; jumping ahead by whole weeks lands on a Wednesday
     // and would step straight past that week's Monday.
     const ics = wrap(
-      event(["DTSTART:20200101T100000", "SUMMARY:Class", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE", "UID:f2"]),
+      event([
+        "DTSTART:20200101T100000",
+        "SUMMARY:Class",
+        "RRULE:FREQ=WEEKLY;BYDAY=MO,WE",
+        "UID:f2",
+      ]),
     );
     const days = new Set(parseCalendar(ics, FROM, TO).map((e) => e.start.getDay()));
     assert.deepEqual([...days].sort(), [1, 3], "Mondays as well as Wednesdays");
@@ -386,15 +419,26 @@ describe("a monthly or yearly date that does not exist every period", () => {
       event(["DTSTART:20260131T090000", "SUMMARY:Check-up", "RRULE:FREQ=MONTHLY", "UID:m1"]),
     );
     const out = parseCalendar(ics, new Date(2026, 0, 1), new Date(2027, 0, 1));
-    assert.ok(out.every((e) => e.start.getDate() === 31), out.map((e) => e.start.toDateString()).join(", "));
+    assert.ok(
+      out.every((e) => e.start.getDate() === 31),
+      out.map((e) => e.start.toDateString()).join(", "),
+    );
     // February, April, June, September and November have no 31st: skipped, not
     // nudged onto a neighbouring day the user has nothing on.
-    assert.deepEqual(out.map((e) => e.start.getMonth()), [0, 2, 4, 6, 7, 9, 11]);
+    assert.deepEqual(
+      out.map((e) => e.start.getMonth()),
+      [0, 2, 4, 6, 7, 9, 11],
+    );
   });
 
   it("puts a 29 February birthday only in leap years", () => {
     const ics = wrap(
-      event(["DTSTART;VALUE=DATE:20240229", "SUMMARY:Leap birthday", "RRULE:FREQ=YEARLY", "UID:m2"]),
+      event([
+        "DTSTART;VALUE=DATE:20240229",
+        "SUMMARY:Leap birthday",
+        "RRULE:FREQ=YEARLY",
+        "UID:m2",
+      ]),
     );
     const out = parseCalendar(ics, new Date(2026, 0, 1), new Date(2031, 0, 1));
     assert.equal(out.length, 1);
@@ -437,7 +481,10 @@ describe("occurrences the user has already had removed", () => {
         "UID:e1",
       ]),
     );
-    assert.deepEqual(parseCalendar(ics, FROM, TO).map((e) => e.start.getDate()), [1, 29]);
+    assert.deepEqual(
+      parseCalendar(ics, FROM, TO).map((e) => e.start.getDate()),
+      [1, 29],
+    );
   });
 
   it("does not announce a moved appointment at its old time as well as its new one", () => {
@@ -446,7 +493,12 @@ describe("occurrences the user has already had removed", () => {
     // RRULE, so without suppression the user is told about both.
     const ics = wrap(
       event(["DTSTART:20260901T100000", "SUMMARY:Physio", "RRULE:FREQ=WEEKLY", "UID:r1"]),
-      event(["DTSTART:20260910T150000", "SUMMARY:Physio", "RECURRENCE-ID:20260908T100000", "UID:r1"]),
+      event([
+        "DTSTART:20260910T150000",
+        "SUMMARY:Physio",
+        "RECURRENCE-ID:20260908T100000",
+        "UID:r1",
+      ]),
     );
     const out = parseCalendar(ics, FROM, TO);
     assert.equal(out.filter((e) => e.start.getDate() === 8).length, 0, "old slot is gone");
@@ -464,7 +516,10 @@ describe("occurrences the user has already had removed", () => {
         "UID:r2",
       ]),
     );
-    assert.deepEqual(parseCalendar(ics, FROM, TO).map((e) => e.start.getDate()), [1, 15, 22, 29]);
+    assert.deepEqual(
+      parseCalendar(ics, FROM, TO).map((e) => e.start.getDate()),
+      [1, 15, 22, 29],
+    );
   });
 
   it("does not let an override delete itself when only the name changed", () => {

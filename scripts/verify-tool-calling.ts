@@ -169,7 +169,9 @@ function report(label: string, p: Probe, notes: string[] = []): void {
     for (const n of notes) console.log(`   ${n}`);
     return;
   }
-  console.log(`   frames: ${p.frames.length}  deltas: ${p.deltas.length}  calls: ${p.calls.length}`);
+  console.log(
+    `   frames: ${p.frames.length}  deltas: ${p.deltas.length}  calls: ${p.calls.length}`,
+  );
   if (p.text.trim()) console.log(`   text: ${JSON.stringify(p.text.slice(0, 200))}`);
   for (const c of p.calls) {
     console.log(
@@ -201,9 +203,7 @@ async function main(): Promise<void> {
   const shaped =
     Array.isArray(p1.firstToolCallDelta) && (p1.firstToolCallDelta as unknown[]).length > 0;
   console.log(
-    `\n-- 2  delta shape -- ${
-      shaped ? "tool_calls present in delta" : "no tool_calls delta seen"
-    }`,
+    `\n-- 2  delta shape -- ${shaped ? "tool_calls present in delta" : "no tool_calls delta seen"}`,
   );
   if (shaped) {
     const first = (p1.firstToolCallDelta as Array<Record<string, unknown>>)[0]!;
@@ -390,7 +390,9 @@ async function endToEnd(): Promise<void> {
       return;
     }
 
-    console.log(`   round ${round} called: ${calls.map((c) => `${c.name}(${JSON.stringify(c.args)})`).join(", ")}`);
+    console.log(
+      `   round ${round} called: ${calls.map((c) => `${c.name}(${JSON.stringify(c.args)})`).join(", ")}`,
+    );
 
     // Concurrently, exactly as session.#runTools now does.
     const results = await Promise.all(
@@ -402,7 +404,9 @@ async function endToEnd(): Promise<void> {
       ),
     );
     for (const r of results) {
-      console.log(`   -> ${r.name} ${r.ok ? `ok ${JSON.stringify(r.data)}` : `FAILED ${r.error.code}: ${r.error.message}`} (${r.elapsed_ms}ms)`);
+      console.log(
+        `   -> ${r.name} ${r.ok ? `ok ${JSON.stringify(r.data)}` : `FAILED ${r.error.code}: ${r.error.message}`} (${r.elapsed_ms}ms)`,
+      );
     }
 
     messages.push({

@@ -23,7 +23,13 @@
  * downstream needs a second code path.
  */
 
-import { CircuitBreaker, DEFAULT_BREAKER, guard, type BreakerOptions, type BreakerState } from "../domain/circuit-breaker.ts";
+import {
+  CircuitBreaker,
+  DEFAULT_BREAKER,
+  guard,
+  type BreakerOptions,
+  type BreakerState,
+} from "../domain/circuit-breaker.ts";
 import type { JsonContext, Profile, SessionState, Turn } from "../domain/types.ts";
 import type { SessionStore, TurnContext } from "./session-store.ts";
 

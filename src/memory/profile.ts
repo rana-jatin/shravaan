@@ -34,7 +34,7 @@ export function decayedSalience(fact: Fact, now: Date): number {
 export async function buildProfile(
   uid: string,
   store: LongTermStore,
-  opts: { preferredLanguage: string; now?: Date } ,
+  opts: { preferredLanguage: string; now?: Date },
 ): Promise<Profile> {
   const now = opts.now ?? new Date();
 

@@ -49,11 +49,11 @@ const realFetch = globalThis.fetch;
 /** Serve one canned SSE stream to the next fetch. */
 function serve(frames: string[]): void {
   const body = frames.map((f) => `data: ${f}\n`).join("");
-  globalThis.fetch = (async () =>
+  globalThis.fetch = async () =>
     new Response(body, {
       status: 200,
       headers: { "content-type": "text/event-stream" },
-    })) as typeof fetch;
+    });
 }
 
 async function collect(
@@ -71,7 +71,10 @@ async function collect(
 }
 
 const spoken = (chunks: StreamChunk[]): string =>
-  chunks.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("");
+  chunks
+    .filter((c) => c.type === "text")
+    .map((c) => (c as { text: string }).text)
+    .join("");
 
 afterEach(() => {
   globalThis.fetch = realFetch;

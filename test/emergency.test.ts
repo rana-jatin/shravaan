@@ -119,12 +119,18 @@ describe("naming the people", () => {
     // "I'm telling Harsh" — a roll number read aloud to a frightened person
     // helps nobody.
     const { contacts } = parseContacts("harsh.20224070@mnnit.ac.in,aman.20234023@mnnit.ac.in");
-    assert.deepEqual(contacts.map((c) => c.name), ["Harsh", "Aman"]);
+    assert.deepEqual(
+      contacts.map((c) => c.name),
+      ["Harsh", "Aman"],
+    );
   });
 
   it("takes an explicit name when given one", () => {
     const { contacts } = parseContacts("Dr Rao=rao@hospital.in,harsh.2022@mnnit.ac.in");
-    assert.deepEqual(contacts.map((c) => c.name), ["Dr Rao", "Harsh"]);
+    assert.deepEqual(
+      contacts.map((c) => c.name),
+      ["Dr Rao", "Harsh"],
+    );
   });
 
   it("reports an address that is not an address rather than silently dropping it", () => {
@@ -162,7 +168,10 @@ describe("raising the alarm", () => {
     const out = await alerter(async (m) => void sent.push(m)).raise(input);
 
     assert.equal(out.sent, true);
-    assert.deepEqual(sent[0]?.to, CONTACTS.map((c) => c.email));
+    assert.deepEqual(
+      sent[0]?.to,
+      CONTACTS.map((c) => c.email),
+    );
   });
 
   it("puts the verbatim words in the body, not a summary", async () => {
@@ -302,7 +311,7 @@ describe("the raise_alarm tool", () => {
         contacts: CONTACTS,
       }),
     );
-    const out = await spec.handler!({ what_happened: "She has fallen" }, ctx());
+    const out = await spec.handler({ what_happened: "She has fallen" }, ctx());
 
     assert.equal(out["alerted"], false);
     assert.match(String(out["tell_the_user"]), /could not reach/i);
@@ -312,7 +321,7 @@ describe("the raise_alarm tool", () => {
     const spec = createRaiseAlarm(
       new EmergencyAlerter({ send: async () => {}, contacts: CONTACTS }),
     );
-    const out = await spec.handler!({ what_happened: "Chest pain" }, ctx());
+    const out = await spec.handler({ what_happened: "Chest pain" }, ctx());
     assert.equal(out["alerted"], true);
     assert.deepEqual(out["contacts"], ["Harsh", "Aman"]);
   });
@@ -375,8 +384,10 @@ function fakeSmtpServer(): Promise<{ port: number; captured: Captured; close: ()
         } else if (upper === "QUIT") {
           socket.write("221 Bye\r\n");
           socket.end();
-        } else if (captured.commands.filter((c) => /^[A-Za-z0-9+/]+=*$/.test(c)).length === 1 &&
-                   /^[A-Za-z0-9+/]+=*$/.test(line)) {
+        } else if (
+          captured.commands.filter((c) => /^[A-Za-z0-9+/]+=*$/.test(c)).length === 1 &&
+          /^[A-Za-z0-9+/]+=*$/.test(line)
+        ) {
           socket.write("334 UGFzc3dvcmQ6\r\n");
         } else if (/^[A-Za-z0-9+/]+=*$/.test(line)) {
           socket.write("235 2.7.0 Authentication successful\r\n");
@@ -519,9 +530,7 @@ describe("the Web API transport", () => {
     assert.equal(req.url, "https://api.sendgrid.com/v3/mail/send");
     assert.equal(req.headers["authorization"], "Bearer SG.key");
     const body = req.body as Record<string, any>;
-    assert.deepEqual(body["personalizations"], [
-      { to: CONTACTS.map((c) => ({ email: c.email })) },
-    ]);
+    assert.deepEqual(body["personalizations"], [{ to: CONTACTS.map((c) => ({ email: c.email })) }]);
     assert.deepEqual(body["from"], { email: "device@example.com", name: "Companion" });
     assert.equal(body["content"][0].type, "text/plain");
     // The transcript is not English. It must survive as text, not as HTML.
@@ -531,14 +540,21 @@ describe("the Web API transport", () => {
   it("treats a SendGrid 202 as sent and anything else as failure", async () => {
     const ok = captureFetch(202);
     await createHttpMailSender({
-      provider: "sendgrid", apiKey: "k", from: "a@b.com", fetch: ok.fetch,
+      provider: "sendgrid",
+      apiKey: "k",
+      from: "a@b.com",
+      fetch: ok.fetch,
     })(msg);
 
     const bad = captureFetch(200, "");
     await assert.rejects(
-      () => createHttpMailSender({
-        provider: "sendgrid", apiKey: "k", from: "a@b.com", fetch: bad.fetch,
-      })(msg),
+      () =>
+        createHttpMailSender({
+          provider: "sendgrid",
+          apiKey: "k",
+          from: "a@b.com",
+          fetch: bad.fetch,
+        })(msg),
       /HTTP 200/,
       "a 200 from SendGrid is NOT an accepted send",
     );
@@ -547,7 +563,10 @@ describe("the Web API transport", () => {
   it("uses Brevo's own auth header rather than a bearer token", async () => {
     const cap = captureFetch(201);
     await createHttpMailSender({
-      provider: "brevo", apiKey: "xkeysib-1", from: "a@b.com", fetch: cap.fetch,
+      provider: "brevo",
+      apiKey: "xkeysib-1",
+      from: "a@b.com",
+      fetch: cap.fetch,
     })(msg);
     assert.equal(cap.seen[0]!.headers["api-key"], "xkeysib-1");
     assert.equal(cap.seen[0]!.headers["authorization"], undefined);
@@ -556,18 +575,28 @@ describe("the Web API transport", () => {
   it("sends Resend a single from string", async () => {
     const cap = captureFetch(200);
     await createHttpMailSender({
-      provider: "resend", apiKey: "re_1", from: "Companion <a@b.com>", fetch: cap.fetch,
+      provider: "resend",
+      apiKey: "re_1",
+      from: "Companion <a@b.com>",
+      fetch: cap.fetch,
     })(msg);
     assert.equal((cap.seen[0]!.body as Record<string, unknown>)["from"], "Companion <a@b.com>");
   });
 
   it("carries the provider's own error text into the failure", async () => {
     // That text is the only thing that says WHICH field was wrong.
-    const cap = captureFetch(403, '{"errors":[{"message":"does not match a verified Sender Identity"}]}');
+    const cap = captureFetch(
+      403,
+      '{"errors":[{"message":"does not match a verified Sender Identity"}]}',
+    );
     await assert.rejects(
-      () => createHttpMailSender({
-        provider: "sendgrid", apiKey: "k", from: "a@b.com", fetch: cap.fetch,
-      })(msg),
+      () =>
+        createHttpMailSender({
+          provider: "sendgrid",
+          apiKey: "k",
+          from: "a@b.com",
+          fetch: cap.fetch,
+        })(msg),
       /verified Sender Identity/,
     );
   });
@@ -581,9 +610,14 @@ describe("the Web API transport", () => {
       })) as typeof globalThis.fetch;
 
     await assert.rejects(
-      () => createHttpMailSender({
-        provider: "sendgrid", apiKey: "k", from: "a@b.com", fetch: never, timeoutMs: 30,
-      })(msg),
+      () =>
+        createHttpMailSender({
+          provider: "sendgrid",
+          apiKey: "k",
+          from: "a@b.com",
+          fetch: never,
+          timeoutMs: 30,
+        })(msg),
       /timed out/,
     );
   });
@@ -607,6 +641,9 @@ describe("explaining a rejection", () => {
   });
 
   it("points a 401 at the key's permissions", () => {
-    assert.match(String(explainMailApiError("sendgrid", "sendgrid: HTTP 401 {}")), /Mail Send permission/);
+    assert.match(
+      String(explainMailApiError("sendgrid", "sendgrid: HTTP 401 {}")),
+      /Mail Send permission/,
+    );
   });
 });

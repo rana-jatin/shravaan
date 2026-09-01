@@ -80,29 +80,66 @@ export const EMERGENCY_PHRASES: Record<LanguageCode, string[]> = {
     // NOTE: "help help" is deliberately NOT here — the repetition rule below
     // catches it at any length, and listing it twice would report the wrong
     // trigger in the alert email.
-    "somebody help", "someone help", "anybody help",
-    "call someone", "call my son", "call my daughter", "call the doctor",
-    "call an ambulance", "ambulance", "emergency", "i have fallen", "i've fallen",
-    "i fell down", "i can't get up", "i cannot get up", "chest pain", "can't breathe",
-    "cannot breathe", "i am dying", "save me", "help me please", "please help",
+    "somebody help",
+    "someone help",
+    "anybody help",
+    "call someone",
+    "call my son",
+    "call my daughter",
+    "call the doctor",
+    "call an ambulance",
+    "ambulance",
+    "emergency",
+    "i have fallen",
+    "i've fallen",
+    "i fell down",
+    "i can't get up",
+    "i cannot get up",
+    "chest pain",
+    "can't breathe",
+    "cannot breathe",
+    "i am dying",
+    "save me",
+    "help me please",
+    "please help",
   ],
   "hi-IN": [
-    "bachao", "bachaao", "koi hai", "koi to aao",
-    "doctor ko bulao", "ambulance bulao", "bete ko bulao", "gir gaya", "gir gayi",
-    "uth nahi", "saans nahi", "seene mein dard", "bahut dard",
-    "बचाओ", "कोई है", "गिर गया", "गिर गयी", "साँस नहीं", "सीने में दर्द",
+    "bachao",
+    "bachaao",
+    "koi hai",
+    "koi to aao",
+    "doctor ko bulao",
+    "ambulance bulao",
+    "bete ko bulao",
+    "gir gaya",
+    "gir gayi",
+    "uth nahi",
+    "saans nahi",
+    "seene mein dard",
+    "bahut dard",
+    "बचाओ",
+    "कोई है",
+    "गिर गया",
+    "गिर गयी",
+    "साँस नहीं",
+    "सीने में दर्द",
   ],
-  "bn-IN": [
-    "bachao", "keu ache", "porey gechi", "daktar dako",
-    "বাঁচাও", "কেউ আছে", "পড়ে গেছি",
-  ],
+  "bn-IN": ["bachao", "keu ache", "porey gechi", "daktar dako", "বাঁচাও", "কেউ আছে", "পড়ে গেছি"],
   "ta-IN": [
-    "kapathunga", "yaaravadhu", "vizhundhuten", "doctor ah kupidunga",
-    "காப்பாற்று", "விழுந்துவிட்டேன்",
+    "kapathunga",
+    "yaaravadhu",
+    "vizhundhuten",
+    "doctor ah kupidunga",
+    "காப்பாற்று",
+    "விழுந்துவிட்டேன்",
   ],
   "te-IN": [
-    "kapadandi", "evaraina unnara", "padipoyanu", "doctor ni pilavandi",
-    "కాపాడండి", "పడిపోయాను",
+    "kapadandi",
+    "evaraina unnara",
+    "padipoyanu",
+    "doctor ni pilavandi",
+    "కాపాడండి",
+    "పడిపోయాను",
   ],
   "gu-IN": ["bachavo", "koi che", "padi gayo", "doctor ne bolavo", "બચાવો", "પડી ગયો"],
   "kn-IN": ["kapadi", "yaaradru iddira", "biddhe", "doctor na kareyiri", "ಕಾಪಾಡಿ", "ಬಿದ್ದೆ"],
@@ -140,9 +177,29 @@ export const AMBIGUOUS_PHRASES: Record<LanguageCode, string[]> = {
  * separates distress from a request.
  */
 const REPEATABLE = new Set([
-  "help", "madad", "bachao", "bachaao", "madat", "sahayam", "sahaya", "sahajya", "sahajjo",
-  "udhavi", "मदद", "बचाओ", "सहायता", "मदत", "সাহায্য", "উদ্ধার", "உதவி", "సహాయం",
-  "મદદ", "ಸಹಾಯ", "സഹായം", "ਮਦਦ", "ସାହାଯ୍ୟ",
+  "help",
+  "madad",
+  "bachao",
+  "bachaao",
+  "madat",
+  "sahayam",
+  "sahaya",
+  "sahajya",
+  "sahajjo",
+  "udhavi",
+  "मदद",
+  "बचाओ",
+  "सहायता",
+  "मदत",
+  "সাহায্য",
+  "উদ্ধার",
+  "உதவி",
+  "సహాయం",
+  "મદદ",
+  "ಸಹಾಯ",
+  "സഹായം",
+  "ਮਦਦ",
+  "ସାହାଯ୍ୟ",
 ]);
 
 /**
@@ -158,7 +215,7 @@ const SHORT_TURN_WORDS = 4;
 function words(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/[.,!?;:।॥"'()\-]/g, " ")
+    .replace(/[.,!?;:।॥"'()-]/g, " ")
     .split(/\s+/)
     .filter((w) => w !== "");
 }
@@ -237,14 +294,20 @@ export function matchEmergency(text: string, language: LanguageCode): EmergencyM
  * ⚠ Same review status as the phrases: en-IN and hi-IN only.
  */
 export const EMERGENCY_ACK: Record<LanguageCode, string> = {
-  "en-IN": "I'm getting you help right now. I'm telling {names}. Stay where you are — I'm here with you.",
-  "hi-IN": "मैं अभी आपके लिए मदद बुला रहा हूँ। मैं {names} को बता रहा हूँ। आप वहीं रहिए — मैं आपके साथ हूँ।",
+  "en-IN":
+    "I'm getting you help right now. I'm telling {names}. Stay where you are — I'm here with you.",
+  "hi-IN":
+    "मैं अभी आपके लिए मदद बुला रहा हूँ। मैं {names} को बता रहा हूँ। आप वहीं रहिए — मैं आपके साथ हूँ।",
   "bn-IN": "আমি এখনই সাহায্য আনছি। আমি {names}-কে জানাচ্ছি। আপনি ওখানেই থাকুন — আমি আছি।",
-  "ta-IN": "நான் இப்போதே உதவி பெறுகிறேன். {names} அவர்களுக்குச் சொல்கிறேன். அங்கேயே இருங்கள் — நான் இருக்கிறேன்.",
-  "te-IN": "నేను ఇప్పుడే సహాయం తీసుకువస్తున్నాను. {names} కి చెబుతున్నాను. అక్కడే ఉండండి — నేను ఉన్నాను.",
+  "ta-IN":
+    "நான் இப்போதே உதவி பெறுகிறேன். {names} அவர்களுக்குச் சொல்கிறேன். அங்கேயே இருங்கள் — நான் இருக்கிறேன்.",
+  "te-IN":
+    "నేను ఇప్పుడే సహాయం తీసుకువస్తున్నాను. {names} కి చెబుతున్నాను. అక్కడే ఉండండి — నేను ఉన్నాను.",
   "gu-IN": "હું અત્યારે જ મદદ બોલાવું છું. હું {names} ને જણાવું છું. તમે ત્યાં જ રહો — હું છું.",
-  "kn-IN": "ನಾನು ಈಗಲೇ ಸಹಾಯ ಕರೆಸುತ್ತಿದ್ದೇನೆ. {names} ಅವರಿಗೆ ತಿಳಿಸುತ್ತಿದ್ದೇನೆ. ಅಲ್ಲಿಯೇ ಇರಿ — ನಾನಿದ್ದೇನೆ.",
-  "ml-IN": "ഞാൻ ഇപ്പോൾ തന്നെ സഹായം എത്തിക്കുന്നു. {names} നോട് പറയുന്നു. അവിടെ തന്നെ ഇരിക്കൂ — ഞാനുണ്ട്.",
+  "kn-IN":
+    "ನಾನು ಈಗಲೇ ಸಹಾಯ ಕರೆಸುತ್ತಿದ್ದೇನೆ. {names} ಅವರಿಗೆ ತಿಳಿಸುತ್ತಿದ್ದೇನೆ. ಅಲ್ಲಿಯೇ ಇರಿ — ನಾನಿದ್ದೇನೆ.",
+  "ml-IN":
+    "ഞാൻ ഇപ്പോൾ തന്നെ സഹായം എത്തിക്കുന്നു. {names} നോട് പറയുന്നു. അവിടെ തന്നെ ഇരിക്കൂ — ഞാനുണ്ട്.",
   "mr-IN": "मी आत्ताच मदत बोलावतो आहे. मी {names} ला सांगतो आहे. तुम्ही तिथेच थांबा — मी आहे.",
   "pa-IN": "ਮੈਂ ਹੁਣੇ ਮਦਦ ਬੁਲਾ ਰਿਹਾ ਹਾਂ। ਮੈਂ {names} ਨੂੰ ਦੱਸ ਰਿਹਾ ਹਾਂ। ਤੁਸੀਂ ਉੱਥੇ ਹੀ ਰਹੋ — ਮੈਂ ਹਾਂ।",
   "or-IN": "ମୁଁ ବର୍ତ୍ତମାନ ସାହାଯ୍ୟ ଆଣୁଛି। ମୁଁ {names} ଙ୍କୁ କହୁଛି। ସେଠାରେ ରୁହନ୍ତୁ — ମୁଁ ଅଛି।",
@@ -259,17 +322,27 @@ export const EMERGENCY_ACK: Record<LanguageCode, string> = {
  * merely logged.
  */
 export const EMERGENCY_FAILED: Record<LanguageCode, string> = {
-  "en-IN": "I could not reach anyone just now. Please try to call someone yourself if you can — I will keep trying.",
-  "hi-IN": "मैं अभी किसी तक नहीं पहुँच पाया। हो सके तो आप खुद किसी को फ़ोन कीजिए — मैं कोशिश करता रहूँगा।",
+  "en-IN":
+    "I could not reach anyone just now. Please try to call someone yourself if you can — I will keep trying.",
+  "hi-IN":
+    "मैं अभी किसी तक नहीं पहुँच पाया। हो सके तो आप खुद किसी को फ़ोन कीजिए — मैं कोशिश करता रहूँगा।",
   "bn-IN": "আমি এখন কারও কাছে পৌঁছাতে পারিনি। পারলে নিজে কাউকে ফোন করুন — আমি চেষ্টা করে যাব।",
-  "ta-IN": "என்னால் இப்போது யாரையும் தொடர்பு கொள்ள முடியவில்லை. முடிந்தால் நீங்களே யாரையாவது அழையுங்கள் — நான் முயற்சி செய்கிறேன்.",
-  "te-IN": "నేను ఇప్పుడు ఎవరినీ చేరుకోలేకపోయాను. వీలైతే మీరే ఎవరికైనా ఫోన్ చేయండి — నేను ప్రయత్నిస్తూ ఉంటాను.",
-  "gu-IN": "હું અત્યારે કોઈ સુધી પહોંચી શક્યો નથી. બની શકે તો તમે જાતે કોઈને ફોન કરો — હું પ્રયત્ન કરતો રહીશ.",
-  "kn-IN": "ನನಗೆ ಈಗ ಯಾರನ್ನೂ ತಲುಪಲು ಆಗಲಿಲ್ಲ. ಸಾಧ್ಯವಾದರೆ ನೀವೇ ಯಾರಿಗಾದರೂ ಕರೆ ಮಾಡಿ — ನಾನು ಪ್ರಯತ್ನಿಸುತ್ತೇನೆ.",
-  "ml-IN": "എനിക്ക് ഇപ്പോൾ ആരെയും വിളിക്കാൻ കഴിഞ്ഞില്ല. കഴിയുമെങ്കിൽ നിങ്ങൾ തന്നെ ആരെയെങ്കിലും വിളിക്കൂ — ഞാൻ ശ്രമിച്ചുകൊണ്ടിരിക്കും.",
-  "mr-IN": "मला आत्ता कोणापर्यंत पोहोचता आले नाही. शक्य असल्यास तुम्ही स्वतः कोणाला तरी फोन करा — मी प्रयत्न करत राहीन.",
-  "pa-IN": "ਮੈਂ ਹੁਣੇ ਕਿਸੇ ਤੱਕ ਨਹੀਂ ਪਹੁੰਚ ਸਕਿਆ। ਜੇ ਹੋ ਸਕੇ ਤਾਂ ਤੁਸੀਂ ਖੁਦ ਕਿਸੇ ਨੂੰ ਫੋਨ ਕਰੋ — ਮੈਂ ਕੋਸ਼ਿਸ਼ ਕਰਦਾ ਰਹਾਂਗਾ।",
-  "or-IN": "ମୁଁ ଏବେ କାହା ପାଖରେ ପହଞ୍ଚି ପାରିଲି ନାହିଁ। ସମ୍ଭବ ହେଲେ ଆପଣ ନିଜେ କାହାକୁ ଫୋନ କରନ୍ତୁ — ମୁଁ ଚେଷ୍ଟା କରୁଥିବି।",
+  "ta-IN":
+    "என்னால் இப்போது யாரையும் தொடர்பு கொள்ள முடியவில்லை. முடிந்தால் நீங்களே யாரையாவது அழையுங்கள் — நான் முயற்சி செய்கிறேன்.",
+  "te-IN":
+    "నేను ఇప్పుడు ఎవరినీ చేరుకోలేకపోయాను. వీలైతే మీరే ఎవరికైనా ఫోన్ చేయండి — నేను ప్రయత్నిస్తూ ఉంటాను.",
+  "gu-IN":
+    "હું અત્યારે કોઈ સુધી પહોંચી શક્યો નથી. બની શકે તો તમે જાતે કોઈને ફોન કરો — હું પ્રયત્ન કરતો રહીશ.",
+  "kn-IN":
+    "ನನಗೆ ಈಗ ಯಾರನ್ನೂ ತಲುಪಲು ಆಗಲಿಲ್ಲ. ಸಾಧ್ಯವಾದರೆ ನೀವೇ ಯಾರಿಗಾದರೂ ಕರೆ ಮಾಡಿ — ನಾನು ಪ್ರಯತ್ನಿಸುತ್ತೇನೆ.",
+  "ml-IN":
+    "എനിക്ക് ഇപ്പോൾ ആരെയും വിളിക്കാൻ കഴിഞ്ഞില്ല. കഴിയുമെങ്കിൽ നിങ്ങൾ തന്നെ ആരെയെങ്കിലും വിളിക്കൂ — ഞാൻ ശ്രമിച്ചുകൊണ്ടിരിക്കും.",
+  "mr-IN":
+    "मला आत्ता कोणापर्यंत पोहोचता आले नाही. शक्य असल्यास तुम्ही स्वतः कोणाला तरी फोन करा — मी प्रयत्न करत राहीन.",
+  "pa-IN":
+    "ਮੈਂ ਹੁਣੇ ਕਿਸੇ ਤੱਕ ਨਹੀਂ ਪਹੁੰਚ ਸਕਿਆ। ਜੇ ਹੋ ਸਕੇ ਤਾਂ ਤੁਸੀਂ ਖੁਦ ਕਿਸੇ ਨੂੰ ਫੋਨ ਕਰੋ — ਮੈਂ ਕੋਸ਼ਿਸ਼ ਕਰਦਾ ਰਹਾਂਗਾ।",
+  "or-IN":
+    "ମୁଁ ଏବେ କାହା ପାଖରେ ପହଞ୍ଚି ପାରିଲି ନାହିଁ। ସମ୍ଭବ ହେଲେ ଆପଣ ନିଜେ କାହାକୁ ଫୋନ କରନ୍ତୁ — ମୁଁ ଚେଷ୍ଟା କରୁଥିବି।",
 };
 
 /** Boot-time list of what a native speaker still has to sign off. */

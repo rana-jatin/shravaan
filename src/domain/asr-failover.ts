@@ -39,7 +39,11 @@ export const FLUX_MULTI_COVERAGE: readonly LanguageCode[] = ["hi-IN", "en-IN"];
 
 export type StandbyDecision =
   | { available: true; provider: "deepgram"; languageHint: string }
-  | { available: false; reason: "no_coverage" | "not_configured" | "already_failed_over"; detail: string };
+  | {
+      available: false;
+      reason: "no_coverage" | "not_configured" | "already_failed_over";
+      detail: string;
+    };
 
 export function standbyFor(
   language: LanguageCode,

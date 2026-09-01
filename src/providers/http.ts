@@ -28,4 +28,4 @@ export type HttpFetch = (
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 /** The real thing, cast to the narrow surface above. */
-export const nodeFetch = (): HttpFetch => globalThis.fetch as unknown as HttpFetch;
+export const nodeFetch = (): HttpFetch => globalThis.fetch;

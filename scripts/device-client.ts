@@ -62,9 +62,7 @@ function parseArgs(argv: string[]): Args {
     url: flags.get("url") ?? `ws://127.0.0.1:${port}`,
     duckVolume: Number(flags.get("duck-volume") ?? process.env["MUSIC_DUCK_VOLUME"] ?? 15),
     mediaResolver:
-      flags.get("media-resolver") ??
-      process.env["MEDIA_RESOLVER"] ??
-      "yt-dlp -f bestaudio -g",
+      flags.get("media-resolver") ?? process.env["MEDIA_RESOLVER"] ?? "yt-dlp -f bestaudio -g",
     mic: flags.get("mic") ?? null,
     file: flags.get("file") ?? null,
     // Raw .pcm carries no header, so its rate has to be asserted. Defaults to
@@ -90,7 +88,15 @@ function log(msg: string, extra: Record<string, unknown> = {}): void {
 
 /** DirectShow names are per-machine and not guessable. Print them, do not assume. */
 function listDevices(): void {
-  const p = spawn("ffmpeg", ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]);
+  const p = spawn("ffmpeg", [
+    "-hide_banner",
+    "-list_devices",
+    "true",
+    "-f",
+    "dshow",
+    "-i",
+    "dummy",
+  ]);
   // ffmpeg prints the device list on stderr and always exits non-zero here,
   // because "dummy" is not a real input. Expected, not a failure.
   p.stderr.on("data", (d: Buffer) => process.stderr.write(d));
@@ -127,15 +133,30 @@ class Player {
     const proc = spawn(
       "ffplay",
       [
-        "-hide_banner", "-loglevel", "error",
-        "-nodisp", "-autoexit",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nodisp",
+        "-autoexit",
         // Play what arrives rather than waiting to fill a buffer. The defaults
         // add hundreds of milliseconds to a budget with none to spare
         // (docs/03-latency-budget.md).
-        "-probesize", "32", "-analyzeduration", "0",
-        "-fflags", "nobuffer", "-flags", "low_delay",
-        "-f", "s16le", "-ar", String(this.#rate), "-ac", "1",
-        "-i", "pipe:0",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-f",
+        "s16le",
+        "-ar",
+        String(this.#rate),
+        "-ac",
+        "1",
+        "-i",
+        "pipe:0",
       ],
       { stdio: ["pipe", "ignore", "inherit"] },
     );
@@ -265,11 +286,25 @@ class MediaPlayer {
     const decoder = spawn(
       "ffmpeg",
       [
-        "-hide_banner", "-loglevel", "error",
-        "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-        "-i", url,
-        "-f", "s16le", "-acodec", "pcm_s16le",
-        "-ar", String(MEDIA_RATE), "-ac", String(MEDIA_CHANNELS),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "5",
+        "-i",
+        url,
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        String(MEDIA_RATE),
+        "-ac",
+        String(MEDIA_CHANNELS),
         "-",
       ],
       { stdio: ["ignore", "pipe", "inherit"] },
@@ -279,9 +314,19 @@ class MediaPlayer {
     const sink = spawn(
       "ffplay",
       [
-        "-hide_banner", "-loglevel", "error", "-nodisp", "-autoexit",
-        "-f", "s16le", "-ar", String(MEDIA_RATE), "-ac", String(MEDIA_CHANNELS),
-        "-i", "pipe:0",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nodisp",
+        "-autoexit",
+        "-f",
+        "s16le",
+        "-ar",
+        String(MEDIA_RATE),
+        "-ac",
+        String(MEDIA_CHANNELS),
+        "-i",
+        "pipe:0",
       ],
       { stdio: ["pipe", "ignore", "inherit"] },
     );
@@ -554,22 +599,45 @@ function main(): void {
     // completes. A real microphone always keeps sending; `apad` emulates that.
     const filePad = ["-af", "apad=pad_dur=2"];
     const input = args.file
-      ? ["-re", "-f", "s16le", "-ar", String(args.fileRate), "-ac", "1", "-i", args.file, ...filePad]
+      ? [
+          "-re",
+          "-f",
+          "s16le",
+          "-ar",
+          String(args.fileRate),
+          "-ac",
+          "1",
+          "-i",
+          args.file,
+          ...filePad,
+        ]
       : [
-          "-f", "dshow",
+          "-f",
+          "dshow",
           // dshow's default capture buffer is a latency floor we would never
           // see in the budget, because it is spent before our first line of code.
-          "-audio_buffer_size", "50",
-          "-i", `audio=${args.mic ?? "default"}`,
+          "-audio_buffer_size",
+          "50",
+          "-i",
+          `audio=${args.mic ?? "default"}`,
         ];
 
     mic = spawn(
       "ffmpeg",
       [
-        "-hide_banner", "-loglevel", "error",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         ...input,
-        "-ac", "1", "-ar", String(args.asrRate),
-        "-acodec", "pcm_s16le", "-f", "s16le", "pipe:1",
+        "-ac",
+        "1",
+        "-ar",
+        String(args.asrRate),
+        "-acodec",
+        "pcm_s16le",
+        "-f",
+        "s16le",
+        "pipe:1",
       ],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
@@ -599,12 +667,17 @@ function main(): void {
       }
     });
 
-    log(args.file ? "replaying file as microphone" : "listening — speak when ready, and use headphones", {
-      source: args.file ?? `mic: ${args.mic ?? "default"}`,
-      frame_bytes: bytesPerFrame,
-      asr_rate: args.asrRate,
-      tts_rate: args.ttsRate,
-    });
+    log(
+      args.file
+        ? "replaying file as microphone"
+        : "listening — speak when ready, and use headphones",
+      {
+        source: args.file ?? `mic: ${args.mic ?? "default"}`,
+        frame_bytes: bytesPerFrame,
+        asr_rate: args.asrRate,
+        tts_rate: args.ttsRate,
+      },
+    );
   });
 
   ws.on("message", (data: Buffer, isBinary: boolean) => {

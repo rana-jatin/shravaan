@@ -71,7 +71,9 @@ export class SarvamAsr extends EventEmitter<AsrEvents> implements AsrClient {
 
     ws.on("open", () => this.emit("open"));
     ws.on("message", (raw) => this.#onMessage(raw));
-    ws.on("error", (err) => this.emit("error", err instanceof Error ? err : new Error(String(err))));
+    ws.on("error", (err) =>
+      this.emit("error", err instanceof Error ? err : new Error(String(err))),
+    );
     ws.on("close", (code, reason) => {
       const detail = reason.toString().trim();
       // Sarvam's guide documents 4000 as "unsupported sample rate", and the

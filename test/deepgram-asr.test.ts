@@ -190,7 +190,7 @@ describe("deepgram flux frame parsing", () => {
     // Mean of 0.9985 and 0.9995. The low-confidence reprompt (Q4) reads this and
     // nothing else, so an absent value silently disables the rule.
     assert.ok(cap.partials[0]?.confidence !== undefined, "confidence was dropped");
-    assert.equal(cap.partials[0]!.confidence!.toFixed(4), "0.9990");
+    assert.equal(cap.partials[0].confidence.toFixed(4), "0.9990");
     cap.asr.close();
   });
 
@@ -220,11 +220,7 @@ describe("deepgram flux frame parsing", () => {
 
   it("treats EagerEndOfTurn as a partial and never as a dispatch", async () => {
     const cap = await connect();
-    await deliver(
-      cap,
-      { ...UPDATE, event: "EagerEndOfTurn" },
-      { ...UPDATE, event: "TurnResumed" },
-    );
+    await deliver(cap, { ...UPDATE, event: "EagerEndOfTurn" }, { ...UPDATE, event: "TurnResumed" });
     // The eager guess is retractable. Acting on it would pay rate limit for a
     // turn that did not happen — on the path that is already degraded.
     assert.deepEqual(cap.events, ["partial"]);
@@ -249,7 +245,11 @@ describe("deepgram flux frame parsing", () => {
 
   it("ignores unknown frames rather than crashing a degraded session", async () => {
     const cap = await connect();
-    await deliver(cap, { type: "Metadata", whatever: true }, { type: "TurnInfo", event: "Invented" });
+    await deliver(
+      cap,
+      { type: "Metadata", whatever: true },
+      { type: "TurnInfo", event: "Invented" },
+    );
     assert.deepEqual(cap.errors, []);
     assert.deepEqual(cap.events, []);
     cap.asr.close();

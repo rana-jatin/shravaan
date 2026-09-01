@@ -221,7 +221,8 @@ export class EmergencyAlerter {
 }
 
 const TRIGGER_TEXT: Record<AlertTrigger, string> = {
-  repeated: 'the words "help help" — asked for twice, which is the phrasing this device watches for',
+  repeated:
+    'the words "help help" — asked for twice, which is the phrasing this device watches for',
   phrase: "a phrase this device watches for",
   bare: "a single shouted call for help",
   model: "the companion judged this an emergency from what was being said",

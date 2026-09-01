@@ -206,7 +206,10 @@ describe("play_music — radio mode", () => {
     const { spec, played, host } = await tool({
       hindi: [station(), station({ stationuuid: "b", url_resolved: "https://s.test/2" })],
     });
-    const out = await spec.handler!({ mode: "radio", query: "purane gaane" }, invocation({ language: "hi-IN", host: fakeHost(host) }));
+    const out = await spec.handler(
+      { mode: "radio", query: "purane gaane" },
+      invocation({ language: "hi-IN", host: fakeHost(host) }),
+    );
 
     assert.equal(out["playing"], true);
     assert.equal(out["station"], "Radio Mirchi Hindi");
@@ -222,13 +225,19 @@ describe("play_music — radio mode", () => {
   it("returns immediately — it must not wait for the song to end", async () => {
     const { spec, host } = await tool({ hindi: [station()] });
     const started = Date.now();
-    await spec.handler!({ mode: "radio", query: "music" }, invocation({ language: "hi-IN", host: fakeHost(host) }));
+    await spec.handler(
+      { mode: "radio", query: "music" },
+      invocation({ language: "hi-IN", host: fakeHost(host) }),
+    );
     assert.ok(Date.now() - started < 100, "the handler holds the turn open while it runs");
   });
 
   it("ASKS before substituting a language, and plays nothing", async () => {
     const { spec, played, host } = await tool({ hindi: [station()], gujarati: [] });
-    const out = await spec.handler!({ mode: "radio", query: "gaano" }, invocation({ language: "gu-IN", host: fakeHost(host) }));
+    const out = await spec.handler(
+      { mode: "radio", query: "gaano" },
+      invocation({ language: "gu-IN", host: fakeHost(host) }),
+    );
 
     assert.equal(out["playing"], false);
     assert.equal(out["reason"], "no_stations_for_language");
@@ -279,7 +288,7 @@ describe("play_music — song mode", () => {
 
   it("resolves a named track to a video id and hands it to the device", async () => {
     const { spec, played, host } = await tool();
-    const out = await spec.handler!(
+    const out = await spec.handler(
       { mode: "song", query: "lag ja gale lata" },
       invocation({ language: "hi-IN", host: fakeHost(host) }),
     );
@@ -296,7 +305,10 @@ describe("play_music — song mode", () => {
 
   it("says it found nothing rather than playing something else", async () => {
     const { spec, played, host } = await tool(JSON.stringify({ items: [] }));
-    const out = await spec.handler!({ mode: "song", query: "nonsense" }, invocation({ host: fakeHost(host) }));
+    const out = await spec.handler(
+      { mode: "song", query: "nonsense" },
+      invocation({ host: fakeHost(host) }),
+    );
 
     assert.equal(out["playing"], false);
     assert.equal(out["reason"], "no_match");
@@ -306,15 +318,26 @@ describe("play_music — song mode", () => {
   it("reports no playable match when every candidate is a Short or live", async () => {
     const shortsOnly = JSON.stringify({
       items: [
-        { id: "s1", snippet: { liveBroadcastContent: "none" }, contentDetails: { duration: "PT18S" } },
-        { id: "s2", snippet: { liveBroadcastContent: "none" }, contentDetails: { duration: "P0D" } },
+        {
+          id: "s1",
+          snippet: { liveBroadcastContent: "none" },
+          contentDetails: { duration: "PT18S" },
+        },
+        {
+          id: "s2",
+          snippet: { liveBroadcastContent: "none" },
+          contentDetails: { duration: "P0D" },
+        },
       ],
     });
     const { spec, played, host } = await tool(
       JSON.stringify({ items: [{ id: { videoId: "s1" } }, { id: { videoId: "s2" } }] }),
       shortsOnly,
     );
-    const out = await spec.handler!({ mode: "song", query: "x" }, invocation({ host: fakeHost(host) }));
+    const out = await spec.handler(
+      { mode: "song", query: "x" },
+      invocation({ host: fakeHost(host) }),
+    );
 
     // Better than playing an 18-second clip and calling it the song they asked for.
     assert.equal(out["playing"], false);
@@ -324,9 +347,9 @@ describe("play_music — song mode", () => {
 
   it("throws on a 403 — the quota failure a prototype will actually hit", async () => {
     // Search costs 100 of 10,000 free daily units, so request 101 fails.
-    const { spec, host } = await tool("quota exceeded", "quota exceeded", 403);
+    const { spec } = await tool("quota exceeded", "quota exceeded", 403);
     await assert.rejects(
-      () => spec.handler!({ mode: "song", query: "anything" }, invocation()),
+      () => spec.handler({ mode: "song", query: "anything" }, invocation()),
       /HTTP 403/,
     );
   });

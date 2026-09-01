@@ -576,7 +576,7 @@ describe("session — closing", () => {
     const written: Array<Record<string, unknown>> = [];
     const h = await opened({
       memStream: {
-        append: async (e) => void written.push(e as unknown as Record<string, unknown>),
+        append: async (e) => void written.push(e),
         read: async () => [],
         ack: async () => {},
         pendingCount: async () => 0,
@@ -597,10 +597,10 @@ describe("session — the seam itself", () => {
   it("never touches the network", async () => {
     const realFetch = globalThis.fetch;
     let calls = 0;
-    globalThis.fetch = (async () => {
+    globalThis.fetch = async () => {
       calls += 1;
       throw new Error("a test reached the network");
-    }) as typeof fetch;
+    };
 
     try {
       const h = await opened();

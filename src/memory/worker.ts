@@ -218,9 +218,7 @@ export class MemoryWorker {
     // record of what happened, and that is only known at the end.
     const closed = events.find((e) => e.kind === "session_closed");
     if (closed) {
-      const languages = [
-        ...new Set(events.map((e) => e.language).filter((l): l is string => !!l)),
-      ];
+      const languages = [...new Set(events.map((e) => e.language).filter((l): l is string => !!l))];
 
       // Bounded, and off the voice path by virtue of being here at all — see the
       // header of care-signals-analyser.ts. A null is "no signals for this
@@ -274,8 +272,7 @@ export class MemoryWorker {
    */
   async #refreshProfile(uid: string, events: MemWriteEvent[]): Promise<void> {
     try {
-      const preferred =
-        [...events].reverse().find((e) => e.language)?.language ?? "hi-IN";
+      const preferred = [...events].reverse().find((e) => e.language)?.language ?? "hi-IN";
       const profile = await buildProfile(uid, this.#longTerm, {
         preferredLanguage: preferred,
         now: this.#opts.now(),
@@ -303,7 +300,11 @@ const empty = (): CommitResult => ({
 });
 
 const normalize = (s: string): string =>
-  s.toLowerCase().replace(/[.,!?;:—…"'`()[\]{}।॥]/g, " ").replace(/\s+/g, " ").trim();
+  s
+    .toLowerCase()
+    .replace(/[.,!?;:—…"'`()[\]{}।॥]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const sameFact = (a: string, b: string): boolean => normalize(a) === normalize(b);
 

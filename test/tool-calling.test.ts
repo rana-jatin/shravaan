@@ -11,11 +11,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import {
-  accumulateArgs,
-  firstJsonValue,
-  parseToolArgs,
-} from "../src/providers/sarvam-llm.ts";
+import { accumulateArgs, firstJsonValue, parseToolArgs } from "../src/providers/sarvam-llm.ts";
 import { ToolRegistry, toSchema, validateArgs } from "../src/tools/registry.ts";
 import {
   BUILTIN_TOOLS,
@@ -225,7 +221,10 @@ describe("built-in tools", () => {
   });
 
   it("get_time reports the timezone it actually used", async () => {
-    const data = await getTime.handler({}, invocation({ host: fakeHost({ timezone: () => "Asia/Kolkata" }) }));
+    const data = await getTime.handler(
+      {},
+      invocation({ host: fakeHost({ timezone: () => "Asia/Kolkata" }) }),
+    );
     assert.equal(data["timezone"], "Asia/Kolkata");
     assert.match(String(data["time_24h"]), /^\d{2}:\d{2}$/);
     assert.ok(String(data["weekday"]).length > 0);

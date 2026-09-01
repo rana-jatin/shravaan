@@ -490,7 +490,7 @@ export function loadConfig() {
      * India, which the residency thread in docs/05 Q14 cares about, and the
      * only one that works with no third party at all.
      */
-    mailTransport: (opt("MAIL_TRANSPORT", "smtp") as "smtp" | "sendgrid" | "resend" | "brevo"),
+    mailTransport: opt("MAIL_TRANSPORT", "smtp") as "smtp" | "sendgrid" | "resend" | "brevo",
     /**
      * For any transport other than `smtp`.
      *
@@ -499,9 +499,7 @@ export function loadConfig() {
      * will already have exported.
      */
     mailApiKey:
-      process.env["MAIL_API_KEY"]?.trim() ||
-      process.env["SENDGRID_API_KEY"]?.trim() ||
-      null,
+      process.env["MAIL_API_KEY"]?.trim() || process.env["SENDGRID_API_KEY"]?.trim() || null,
     /**
      * Sender address for the HTTP transports, `a@b.c` or `Name <a@b.c>`.
      * Falls back to SMTP_FROM so switching transports needs one variable.
@@ -526,7 +524,7 @@ export function loadConfig() {
      */
     smtpHost: process.env["SMTP_HOST"]?.trim() || null,
     smtpPort: num("SMTP_PORT", 465),
-    smtpSecurity: (opt("SMTP_SECURITY", "tls") as "tls" | "starttls" | "none"),
+    smtpSecurity: opt("SMTP_SECURITY", "tls") as "tls" | "starttls" | "none",
     smtpUser: process.env["SMTP_USER"]?.trim() || null,
     smtpPass: process.env["SMTP_PASS"] || null,
     /** Envelope sender. Defaults to SMTP_USER, which is what most relays require. */

@@ -43,7 +43,9 @@ function stubFetch(
 }
 
 const GEO_OK = JSON.stringify({
-  results: [{ name: "Bengaluru", admin1: "Karnataka", country: "India", latitude: 12.97, longitude: 77.59 }],
+  results: [
+    { name: "Bengaluru", admin1: "Karnataka", country: "India", latitude: 12.97, longitude: 77.59 },
+  ],
 });
 
 const FORECAST_OK = JSON.stringify({
@@ -88,7 +90,7 @@ describe("get_weather", () => {
       { match: "geo.test", body: GEO_OK },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    const out = await weather(fetch).handler!({ place: "Bengaluru" }, invocation());
+    const out = await weather(fetch).handler({ place: "Bengaluru" }, invocation());
 
     assert.equal(out["found"], true);
     assert.equal(out["place"], "Bengaluru, Karnataka, India");
@@ -107,13 +109,13 @@ describe("get_weather", () => {
       { match: "geo.test", body: GEO_OK },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    await weather(fetch).handler!({ place: "मुंबई" }, invocation());
+    await weather(fetch).handler({ place: "मुंबई" }, invocation());
     assert.ok(fetch.urls[0]!.includes(encodeURIComponent("मुंबई")));
   });
 
   it("treats an unfindable place as DATA, not an error", async () => {
     const fetch = stubFetch([{ match: "geo.test", body: JSON.stringify({ results: [] }) }]);
-    const out = await weather(fetch).handler!({ place: "Nowherecity" }, invocation());
+    const out = await weather(fetch).handler({ place: "Nowherecity" }, invocation());
 
     assert.equal(out["found"], false);
     assert.equal(out["reason"], "unknown_place");
@@ -126,13 +128,13 @@ describe("get_weather", () => {
       { match: "geo.test", body: GEO_OK },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    await weather(fetch, "Pune").handler!({ place: "   " }, invocation());
+    await weather(fetch, "Pune").handler({ place: "   " }, invocation());
     assert.ok(fetch.urls[0]!.includes("Pune"));
   });
 
   it("asks rather than guesses when there is no place and no default", async () => {
     const fetch = stubFetch([]);
-    const out = await weather(fetch, null).handler!({ place: "" }, invocation());
+    const out = await weather(fetch, null).handler({ place: "" }, invocation());
 
     assert.equal(out["found"], false);
     assert.equal(out["reason"], "no_place_given");
@@ -143,7 +145,7 @@ describe("get_weather", () => {
   it("throws on an upstream failure so the executor speaks tool.unavailable", async () => {
     const fetch = stubFetch([{ match: "geo.test", status: 503, body: "upstream down" }]);
     await assert.rejects(
-      () => weather(fetch).handler!({ place: "Bengaluru" }, invocation()),
+      () => weather(fetch).handler({ place: "Bengaluru" }, invocation()),
       /HTTP 503/,
     );
   });
@@ -151,7 +153,7 @@ describe("get_weather", () => {
   it("throws on a 200 that is not JSON — an HTML error page is still a failure", async () => {
     const fetch = stubFetch([{ match: "geo.test", body: "<html>gateway timeout</html>" }]);
     await assert.rejects(
-      () => weather(fetch).handler!({ place: "Bengaluru" }, invocation()),
+      () => weather(fetch).handler({ place: "Bengaluru" }, invocation()),
       /unparseable JSON/,
     );
   });
@@ -161,7 +163,7 @@ describe("get_weather", () => {
       { match: "geo.test", body: GEO_OK },
       { match: "wx.test", body: JSON.stringify({}) },
     ]);
-    const out = await weather(fetch).handler!({ place: "Bengaluru" }, invocation());
+    const out = await weather(fetch).handler({ place: "Bengaluru" }, invocation());
 
     // Found, but unclear — never a thrown error over a missing optional field.
     assert.equal(out["found"], true);
@@ -184,13 +186,17 @@ describe("get_news", () => {
     <item><title>Third headline</title></item>
   </channel></rss>`;
 
-  function news(fetch: HttpFetch, feeds = { sports: "https://feed.test/sport.rss" }, limit?: number) {
+  function news(
+    fetch: HttpFetch,
+    feeds = { sports: "https://feed.test/sport.rss" },
+    limit?: number,
+  ) {
     return createGetNews({ feeds, fetch, ...(limit === undefined ? {} : { limit }) });
   }
 
   it("returns cleaned, speakable headlines", async () => {
     const fetch = stubFetch([{ match: "feed.test", body: RSS }]);
-    const out = await news(fetch).handler!({ category: "sports" }, invocation());
+    const out = await news(fetch).handler({ category: "sports" }, invocation());
 
     assert.equal(out["found"], 3);
     const headlines = out["headlines"] as Array<{ title: string }>;
@@ -212,7 +218,7 @@ describe("get_news", () => {
   it("treats an unconfigured category as DATA, listing what it does have", async () => {
     const fetch = stubFetch([]);
     const spec = createGetNews({ feeds: { top: "https://feed.test/top.rss" }, fetch });
-    const out = await spec.handler!({ category: "sports" }, invocation());
+    const out = await spec.handler({ category: "sports" }, invocation());
 
     assert.equal(out["found"], 0);
     assert.equal(out["reason"], "category_unavailable");
@@ -223,7 +229,7 @@ describe("get_news", () => {
 
   it("honours the headline limit — this is read aloud, not scrolled", async () => {
     const fetch = stubFetch([{ match: "feed.test", body: RSS }]);
-    const out = await news(fetch, { sports: "https://feed.test/sport.rss" }, 2).handler!(
+    const out = await news(fetch, { sports: "https://feed.test/sport.rss" }, 2).handler(
       { category: "sports" },
       invocation(),
     );
@@ -232,7 +238,7 @@ describe("get_news", () => {
 
   it("reports an empty feed as data rather than throwing", async () => {
     const fetch = stubFetch([{ match: "feed.test", body: "<rss><channel></channel></rss>" }]);
-    const out = await news(fetch).handler!({ category: "sports" }, invocation());
+    const out = await news(fetch).handler({ category: "sports" }, invocation());
 
     assert.equal(out["found"], 0);
     assert.equal(out["reason"], "feed_empty");
@@ -240,7 +246,10 @@ describe("get_news", () => {
 
   it("throws when the feed itself is down", async () => {
     const fetch = stubFetch([{ match: "feed.test", status: 500, body: "" }]);
-    await assert.rejects(() => news(fetch).handler!({ category: "sports" }, invocation()), /HTTP 500/);
+    await assert.rejects(
+      () => news(fetch).handler({ category: "sports" }, invocation()),
+      /HTTP 500/,
+    );
   });
 
   it("carries progress.news", () => {
@@ -284,7 +293,10 @@ describe("RSS parsing — only what a headline needs", () => {
   });
 
   it("has no published date when the feed omits one", () => {
-    assert.equal(parseFeedTitles("<rss><item><title>Bare</title></item></rss>", 5)[0]!.published, null);
+    assert.equal(
+      parseFeedTitles("<rss><item><title>Bare</title></item></rss>", 5)[0]!.published,
+      null,
+    );
   });
 });
 
@@ -344,7 +356,14 @@ const PINCODE_OK = JSON.stringify([
 
 const GEO_PRAYAGRAJ = JSON.stringify({
   results: [
-    { name: "Prayagraj", admin1: "Uttar Pradesh", country: "India", country_code: "IN", latitude: 25.44, longitude: 81.84 },
+    {
+      name: "Prayagraj",
+      admin1: "Uttar Pradesh",
+      country: "India",
+      country_code: "IN",
+      latitude: 25.44,
+      longitude: 81.84,
+    },
   ],
 });
 
@@ -354,7 +373,7 @@ describe("get_weather — resolving which place was meant", () => {
       { match: "geo.test", body: GEO_PRAYAGRAJ },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    const out = await weather(fetch).handler!({ place: "Allahabad" }, invocation());
+    const out = await weather(fetch).handler({ place: "Allahabad" }, invocation());
 
     // The whole defect in one assertion: "Allahabad" must never reach the
     // geocoder, because the geocoder's answer for it is in Iran.
@@ -378,7 +397,7 @@ describe("get_weather — resolving which place was meant", () => {
         { match: "geo.test", body: GEO_PRAYAGRAJ },
         { match: "wx.test", body: FORECAST_OK },
       ]);
-      await weather(fetch).handler!({ place: said }, invocation());
+      await weather(fetch).handler({ place: said }, invocation());
       assert.ok(fetch.urls[0]!.includes(expected), `${said} should resolve to ${expected}`);
     }
   });
@@ -388,7 +407,7 @@ describe("get_weather — resolving which place was meant", () => {
       { match: "geo.test", body: GEO_PRAYAGRAJ },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    await weather(fetch).handler!({ place: "New Bombay" }, invocation());
+    await weather(fetch).handler({ place: "New Bombay" }, invocation());
     assert.ok(fetch.urls[0]!.includes(encodeURIComponent("New Bombay")));
   });
 
@@ -397,7 +416,7 @@ describe("get_weather — resolving which place was meant", () => {
       { match: "geo.test", body: GEO_PRAYAGRAJ },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    await weather(fetch, null, { countryBias: "IN" }).handler!({ place: "Prayagraj" }, invocation());
+    await weather(fetch, null, { countryBias: "IN" }).handler({ place: "Prayagraj" }, invocation());
     assert.ok(fetch.urls[0]!.includes("countryCode=IN"));
   });
 
@@ -408,7 +427,7 @@ describe("get_weather — resolving which place was meant", () => {
       { match: "geo.test", body: GEO_PRAYAGRAJ },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    const out = await weather(fetch, null, { countryBias: "IN" }).handler!(
+    const out = await weather(fetch, null, { countryBias: "IN" }).handler(
       { place: "London" },
       invocation(),
     );
@@ -424,7 +443,7 @@ describe("get_weather — resolving which place was meant", () => {
       { match: "geo.test", body: GEO_PRAYAGRAJ },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    const out = await weather(fetch, null, { pincodeApiBase: "https://post.test" }).handler!(
+    const out = await weather(fetch, null, { pincodeApiBase: "https://post.test" }).handler(
       { place: "211004" },
       invocation(),
     );
@@ -440,7 +459,7 @@ describe("get_weather — resolving which place was meant", () => {
     const fetch = stubFetch([
       { match: "post.test", body: JSON.stringify([{ Status: "Error", PostOffice: null }]) },
     ]);
-    const out = await weather(fetch, null, { pincodeApiBase: "https://post.test" }).handler!(
+    const out = await weather(fetch, null, { pincodeApiBase: "https://post.test" }).handler(
       { place: "999999" },
       invocation(),
     );
@@ -451,7 +470,7 @@ describe("get_weather — resolving which place was meant", () => {
 
   it("does not take the whole tool down when the pincode service is broken", async () => {
     const fetch = stubFetch([{ match: "post.test", status: 502, body: "" }]);
-    const out = await weather(fetch, null, { pincodeApiBase: "https://post.test" }).handler!(
+    const out = await weather(fetch, null, { pincodeApiBase: "https://post.test" }).handler(
       { place: "211004" },
       invocation(),
     );
@@ -464,7 +483,7 @@ describe("get_weather — resolving which place was meant", () => {
 
   it("asks for a place name when pincode support is switched off", async () => {
     const fetch = stubFetch([]);
-    const out = await weather(fetch, null, { pincodeApiBase: null }).handler!(
+    const out = await weather(fetch, null, { pincodeApiBase: null }).handler(
       { place: "211004" },
       invocation(),
     );
@@ -479,7 +498,7 @@ describe("get_weather — resolving which place was meant", () => {
       { match: "geo.test", body: GEO_PRAYAGRAJ },
       { match: "wx.test", body: FORECAST_OK },
     ]);
-    const out = await weather(fetch).handler!({ place: "Prayagraj" }, invocation());
+    const out = await weather(fetch).handler({ place: "Prayagraj" }, invocation());
     assert.equal("asked_for" in out, false);
   });
 });

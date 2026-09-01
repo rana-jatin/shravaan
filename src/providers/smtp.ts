@@ -146,7 +146,6 @@ function redactCommand(line: string): string {
 
 /** RFC 2047, so a non-ASCII subject is not mangled or rejected. */
 function encodeHeader(value: string): string {
-  // eslint-disable-next-line no-control-regex
   if (/^[\x20-\x7E]*$/.test(value)) return value;
   return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
@@ -167,7 +166,9 @@ function formatMessage(cfg: SmtpConfig, msg: MailMessage): string {
   ];
   // Base64 in 76-column lines: the body carries Devanagari, Tamil and Bengali,
   // and 8-bit transport is not something every relay in the path guarantees.
-  const body = Buffer.from(msg.text, "utf8").toString("base64").replace(/(.{76})/g, "$1\r\n");
+  const body = Buffer.from(msg.text, "utf8")
+    .toString("base64")
+    .replace(/(.{76})/g, "$1\r\n");
   return `${headers.join("\r\n")}\r\n\r\n${body}\r\n`;
 }
 

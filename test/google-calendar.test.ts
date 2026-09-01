@@ -92,7 +92,10 @@ describe("an API key is not a scope", () => {
 
   it("puts the key in the query and sends no bearer token", async () => {
     const rec = recordingFetch({ items: [] });
-    const cal = new GoogleCalendar({ auth: { mode: "api_key", key: "secret-key" }, fetch: rec.fetch });
+    const cal = new GoogleCalendar({
+      auth: { mode: "api_key", key: "secret-key" },
+      fetch: rec.fetch,
+    });
     await cal.listEvents({ calendarId: "c", from: new Date(), to: new Date() });
 
     assert.equal(rec.calls.length, 1, "no token exchange for a key");
@@ -125,7 +128,7 @@ describe("service account", () => {
 
     const token = rec.calls.find((c) => c.url.includes("oauth2.googleapis.com"));
     assert.ok(token, "a token exchange happened");
-    const assertion = new URLSearchParams(token!.body!).get("assertion")!;
+    const assertion = new URLSearchParams(token.body!).get("assertion")!;
     const [h, p, sig] = assertion.split(".");
 
     const verifier = createVerify("RSA-SHA256");
@@ -156,7 +159,10 @@ describe("service account", () => {
     const api = rec.calls.filter((c) => !c.url.includes("oauth2.googleapis.com"));
     assert.equal(api.length, 2);
     assert.ok(api.every((c) => c.auth === "Bearer tok-abc"));
-    assert.ok(api.every((c) => !c.url.includes("key=")), "no API key alongside a bearer token");
+    assert.ok(
+      api.every((c) => !c.url.includes("key=")),
+      "no API key alongside a bearer token",
+    );
   });
 
   it("re-mints a token once it is close to expiry", async () => {
@@ -179,7 +185,10 @@ describe("service account", () => {
     // disabled account, a calendar that was never shared.
     const cal = new GoogleCalendar({
       auth: { mode: "service_account", ...account },
-      fetch: jsonFetch({ error: "invalid_grant", error_description: "Invalid JWT Signature." }, 400),
+      fetch: jsonFetch(
+        { error: "invalid_grant", error_description: "Invalid JWT Signature." },
+        400,
+      ),
     });
     await assert.rejects(
       () => cal.listEvents({ calendarId: "c", from: new Date(), to: new Date() }),
@@ -236,7 +245,10 @@ describe("reading what Google returns", () => {
       { id: "c", status: "cancelled", summary: "Called off", start: { date: "2026-09-04" } },
       { id: "d", status: "confirmed", summary: "Real", start: { date: "2026-09-04" } },
     ]);
-    assert.deepEqual(out.map((e) => e.summary), ["Real"]);
+    assert.deepEqual(
+      out.map((e) => e.summary),
+      ["Real"],
+    );
   });
 
   it("skips an entry with nothing to say", async () => {
@@ -249,7 +261,10 @@ describe("reading what Google returns", () => {
       { id: "g", summary: "Broken", start: { dateTime: "not a date" } },
       { id: "h", summary: "Fine", start: { date: "2026-09-04" } },
     ]);
-    assert.deepEqual(out.map((e) => e.summary), ["Fine"]);
+    assert.deepEqual(
+      out.map((e) => e.summary),
+      ["Fine"],
+    );
   });
 });
 
@@ -267,7 +282,10 @@ describe("parseServiceAccount", () => {
     // A PEM pasted through a .env line arrives with literal backslash-n, and
     // node:crypto rejects it silently-looking — "error:1E08010C" and nothing else.
     const out = parseServiceAccount(
-      JSON.stringify({ client_email: "a@b.iam.gserviceaccount.com", private_key: "-----A\\nB-----" }),
+      JSON.stringify({
+        client_email: "a@b.iam.gserviceaccount.com",
+        private_key: "-----A\\nB-----",
+      }),
       read,
     );
     assert.equal(out?.privateKey, "-----A\nB-----");
@@ -298,7 +316,10 @@ describe("add_appointment", () => {
       auth: { mode: "service_account", ...account },
       fetch: rec.fetch,
     });
-    return { spec: createAddAppointment({ client, calendarId: "primary", label: "your calendar" }), rec };
+    return {
+      spec: createAddAppointment({ client, calendarId: "primary", label: "your calendar" }),
+      rec,
+    };
   }
 
   /**
@@ -316,7 +337,7 @@ describe("add_appointment", () => {
     // Never an instant: handing Google the offset ourselves is how an
     // appointment moves by half an hour twice a year.
     const { spec, rec } = tool();
-    const out = await spec.handler!(
+    const out = await spec.handler(
       { what: "Doctor", date: "2026-09-04", time_24h: "10:30", duration_minutes: 45 },
       ctx(),
     );
@@ -331,7 +352,7 @@ describe("add_appointment", () => {
     // Same start and end makes a zero-length event that some clients then do
     // not show at all — an appointment that saved successfully and vanished.
     const { spec, rec } = tool();
-    await spec.handler!({ what: "Amma visiting", date: "2026-09-04" }, ctx());
+    await spec.handler({ what: "Amma visiting", date: "2026-09-04" }, ctx());
 
     const body = written(rec);
     assert.deepEqual(body.start, { date: "2026-09-04" });
@@ -340,7 +361,7 @@ describe("add_appointment", () => {
 
   it("rolls an end time past midnight onto the next day", async () => {
     const { spec, rec } = tool();
-    await spec.handler!(
+    await spec.handler(
       { what: "Late call", date: "2026-09-04", time_24h: "23:30", duration_minutes: 60 },
       ctx(),
     );
@@ -351,7 +372,7 @@ describe("add_appointment", () => {
     // Same reasoning as asked_for on get_weather (D9): the only way a listener
     // can catch a misheard date is hearing the saved one back.
     const { spec } = tool();
-    const out = await spec.handler!(
+    const out = await spec.handler(
       { what: "Physio", date: "2026-09-04", time_24h: "09:00", where: "Clinic" },
       ctx(),
     );
@@ -367,19 +388,28 @@ describe("add_appointment", () => {
     // A thrown error spends the reviewed unavailable copy in eleven languages.
     // A refusal the model can rephrase costs nothing.
     const { spec } = tool();
-    assert.equal((await spec.handler!({ what: "x", date: "next tuesday" }, ctx()))["reason"], "bad_date");
-    assert.equal((await spec.handler!({ what: "", date: "2026-09-04" }, ctx()))["reason"], "missing_what");
     assert.equal(
-      (await spec.handler!({ what: "x", date: "2026-09-04", time_24h: "25:00" }, ctx()))["reason"],
+      (await spec.handler({ what: "x", date: "next tuesday" }, ctx()))["reason"],
+      "bad_date",
+    );
+    assert.equal(
+      (await spec.handler({ what: "", date: "2026-09-04" }, ctx()))["reason"],
+      "missing_what",
+    );
+    assert.equal(
+      (await spec.handler({ what: "x", date: "2026-09-04", time_24h: "25:00" }, ctx()))["reason"],
       "bad_time",
     );
   });
 
   it("is not registrable at all against a key-only credential", async () => {
-    const client = new GoogleCalendar({ auth: { mode: "api_key", key: "k" }, fetch: jsonFetch({}) });
+    const client = new GoogleCalendar({
+      auth: { mode: "api_key", key: "k" },
+      fetch: jsonFetch({}),
+    });
     const spec = createAddAppointment({ client, calendarId: "primary", label: "mine" });
     await assert.rejects(
-      () => spec.handler!({ what: "Doctor", date: "2026-09-04" }, ctx()),
+      () => spec.handler({ what: "Doctor", date: "2026-09-04" }, ctx()),
       CalendarAuthError,
     );
   });

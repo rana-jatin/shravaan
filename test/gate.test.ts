@@ -8,7 +8,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { blocksLlm, endsSession, gate1PreConnect, gate2FirstDetection, gate3Switch, resolveSeedLanguage } from "../src/domain/gate.ts";
+import {
+  blocksLlm,
+  endsSession,
+  gate1PreConnect,
+  gate2FirstDetection,
+  gate3Switch,
+  resolveSeedLanguage,
+} from "../src/domain/gate.ts";
 import {
   HEARD_NOT_SPEAKABLE,
   SPEAKABLE,

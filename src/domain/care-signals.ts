@@ -88,8 +88,7 @@ export const MAX_CHARS = 60_000;
 const SENTIMENT_BREAK = 0.333333333;
 
 export type Analysability =
-  | { ok: true; text: string }
-  | { ok: false; reason: "not_english" | "too_short" | "empty" };
+  { ok: true; text: string } | { ok: false; reason: "not_english" | "too_short" | "empty" };
 
 /**
  * English, or nothing.
@@ -116,9 +115,7 @@ export function isEnglishOnly(languages: readonly LanguageCode[]): boolean {
  * recent half is the half that matters.
  */
 export function userTranscript(events: readonly MemWriteEvent[], maxChars = MAX_CHARS): string {
-  const lines = events
-    .map((e) => e.user_text?.trim())
-    .filter((t): t is string => !!t && t !== "");
+  const lines = events.map((e) => e.user_text?.trim()).filter((t): t is string => !!t && t !== "");
 
   const joined = lines.join("\n");
   if (joined.length <= maxChars) return joined;

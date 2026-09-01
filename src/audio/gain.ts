@@ -49,7 +49,10 @@ export function applyGain(chunk: Buffer, from: number, to: number, perSample: nu
     // Clamped. A gain above 1 is never asked for here, but a wrapped int16 is
     // a full-scale crack rather than a slightly loud note.
     const scaled = Math.round(chunk.readInt16LE(i * 2) * g);
-    out.writeInt16LE(scaled < INT16_MIN ? INT16_MIN : scaled > INT16_MAX ? INT16_MAX : scaled, i * 2);
+    out.writeInt16LE(
+      scaled < INT16_MIN ? INT16_MIN : scaled > INT16_MAX ? INT16_MAX : scaled,
+      i * 2,
+    );
   }
   return { out, gain: g };
 }

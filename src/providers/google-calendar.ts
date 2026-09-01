@@ -201,20 +201,17 @@ export class GoogleCalendar {
     timezone?: string;
     signal?: AbortSignal;
   }): Promise<CalendarEvent[]> {
-    const body = await this.#request(
-      `/calendars/${encodeURIComponent(opts.calendarId)}/events`,
-      {
-        query: {
-          timeMin: opts.from.toISOString(),
-          timeMax: opts.to.toISOString(),
-          singleEvents: "true",
-          orderBy: "startTime",
-          maxResults: String(opts.limit ?? 25),
-          ...(opts.timezone ? { timeZone: opts.timezone } : {}),
-        },
-        ...(opts.signal ? { signal: opts.signal } : {}),
+    const body = await this.#request(`/calendars/${encodeURIComponent(opts.calendarId)}/events`, {
+      query: {
+        timeMin: opts.from.toISOString(),
+        timeMax: opts.to.toISOString(),
+        singleEvents: "true",
+        orderBy: "startTime",
+        maxResults: String(opts.limit ?? 25),
+        ...(opts.timezone ? { timeZone: opts.timezone } : {}),
       },
-    );
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
 
     const items = Array.isArray(body["items"]) ? (body["items"] as Record<string, unknown>[]) : [];
     const out: CalendarEvent[] = [];

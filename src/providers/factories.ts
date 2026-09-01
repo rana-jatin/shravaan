@@ -30,8 +30,7 @@ import type { TtsClient, TtsOptions } from "./tts-client.ts";
 import { SarvamTts } from "./sarvam-tts.ts";
 
 export type AsrSpec =
-  | { provider: "sarvam"; opts: AsrOptions }
-  | { provider: "deepgram"; opts: DeepgramAsrOptions };
+  { provider: "sarvam"; opts: AsrOptions } | { provider: "deepgram"; opts: DeepgramAsrOptions };
 
 export type AsrFactory = (cfg: Config, spec: AsrSpec) => AsrClient;
 export type TtsFactory = (cfg: Config, opts: TtsOptions) => TtsClient;

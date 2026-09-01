@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # --experimental-strip-types is what runs this repo; 22.6 is where it
+          # landed. package.json "engines" says the same thing.
+          node-version: "22.x"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Runs with no credentials and no network on purpose: every provider and
+      # tool takes an injectable client, so the suite must never need a key.
+      - name: Test
+        run: npm test

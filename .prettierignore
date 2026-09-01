@@ -1,0 +1,10 @@
+node_modules/
+dist/
+package-lock.json
+assets/holding/*.pcm
+
+# Markdown is left alone deliberately. `docs/` is the project's spec, not
+# generated prose, and its tables carry long link-heavy cells: prettier pads
+# every column to the widest cell, turning a readable `|---|---|` table into
+# 200-column lines. The compact hand-written form is the better source.
+*.md

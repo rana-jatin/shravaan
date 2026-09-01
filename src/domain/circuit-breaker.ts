@@ -110,7 +110,8 @@ export async function guard<T>(
   breaker: CircuitBreaker,
   fn: () => Promise<T>,
   fallback: T,
-  onTrip?: (err: unknown | null, state: BreakerState) => void,
+  /** `err` is null when the breaker refused the attempt rather than the call failing. */
+  onTrip?: (err: unknown, state: BreakerState) => void,
 ): Promise<T> {
   if (!breaker.canAttempt()) {
     onTrip?.(null, breaker.state);

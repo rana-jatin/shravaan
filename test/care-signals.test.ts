@@ -144,7 +144,10 @@ describe("care signals: the transcript", () => {
   });
 
   it("keeps the END when it has to truncate", () => {
-    const text = userTranscript([event({ user_text: "old news" }), event({ user_text: "recent" })], 6);
+    const text = userTranscript(
+      [event({ user_text: "old news" }), event({ user_text: "recent" })],
+      6,
+    );
     assert.equal(text, "recent");
   });
 });
@@ -165,9 +168,15 @@ describe("care signals: mapping Deepgram's response", () => {
 
   it("uses Deepgram's own banding, not a guess at one", () => {
     // ±0.333333333 is their break point. 0.33 is still neutral.
-    const near = toCareSignals({ results: { sentiments: { average: { sentiment_score: 0.33 } } } }, opts);
+    const near = toCareSignals(
+      { results: { sentiments: { average: { sentiment_score: 0.33 } } } },
+      opts,
+    );
     assert.equal(near?.sentiment?.label, "neutral");
-    const over = toCareSignals({ results: { sentiments: { average: { sentiment_score: 0.34 } } } }, opts);
+    const over = toCareSignals(
+      { results: { sentiments: { average: { sentiment_score: 0.34 } } } },
+      opts,
+    );
     assert.equal(over?.sentiment?.label, "positive");
   });
 
@@ -186,7 +195,11 @@ describe("care signals: mapping Deepgram's response", () => {
       {
         results: {
           sentiments: { average: {} },
-          intents: { segments: [{ text: "ow", intents: [{ intent: "reports pain", confidence_score: 0.9 }] }] },
+          intents: {
+            segments: [
+              { text: "ow", intents: [{ intent: "reports pain", confidence_score: 0.9 }] },
+            ],
+          },
         },
       },
       opts,
@@ -198,7 +211,10 @@ describe("care signals: mapping Deepgram's response", () => {
   });
 
   it("treats NaN and Infinity as missing, not as numbers", () => {
-    const nan = toCareSignals({ results: { sentiments: { average: { sentiment_score: NaN } } } }, opts);
+    const nan = toCareSignals(
+      { results: { sentiments: { average: { sentiment_score: NaN } } } },
+      opts,
+    );
     assert.equal(nan, null);
   });
 });
@@ -265,7 +281,10 @@ describe("care signals: reading the trend back", () => {
   });
 
   it("will not call a direction on too few sessions", () => {
-    assert.equal(moodTrend([withScore(0.8), withScore(-0.8), withScore(-0.8)])?.direction, "unknown");
+    assert.equal(
+      moodTrend([withScore(0.8), withScore(-0.8), withScore(-0.8)])?.direction,
+      "unknown",
+    );
   });
 
   it("reads the recent half against the earlier half — episodes arrive newest first", () => {
@@ -491,7 +510,12 @@ describe("deepgram /v1/read client", () => {
 
 describe("memory worker: signals ride on the episode, or the episode goes without", () => {
   const distiller = {
-    distil: async () => ({ facts: [], summary: "Talked about the garden.", topics: [], open_threads: [] }),
+    distil: async () => ({
+      facts: [],
+      summary: "Talked about the garden.",
+      topics: [],
+      open_threads: [],
+    }),
   };
 
   function makeWorker(signals?: SignalsAnalyser) {
@@ -582,11 +606,17 @@ describe("recall_mood", () => {
     const host = fakeHost({
       recentMood: async (sessions) => {
         asked = sessions;
-        return { sessions: 6, average: -0.4, label: "negative", direction: "lower", flagged: ["reports pain"] };
+        return {
+          sessions: 6,
+          average: -0.4,
+          label: "negative",
+          direction: "lower",
+          flagged: ["reports pain"],
+        };
       },
     });
 
-    const out = await tool.handler!({}, invocation({ host }));
+    const out = await tool.handler({}, invocation({ host }));
 
     assert.equal(asked, 14);
     assert.equal(out["analysed"], 6);
@@ -598,7 +628,10 @@ describe("recall_mood", () => {
     // The normal state of a new device, and the permanent state of every
     // non-English deployment. An error here would cost eleven translations to
     // say something that is not a failure.
-    const out = await tool.handler!({}, invocation({ host: fakeHost({ recentMood: async () => null }) }));
+    const out = await tool.handler(
+      {},
+      invocation({ host: fakeHost({ recentMood: async () => null }) }),
+    );
     assert.deepEqual(out, { analysed: 0, reason: "nothing_recorded" });
   });
 

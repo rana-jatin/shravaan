@@ -1,0 +1,13 @@
+# Normalise line endings. Without this, a Windows checkout (core.autocrlf=true)
+# gets CRLF working copies while git stores LF, and `prettier --check` fails on
+# every fresh clone for reasons that have nothing to do with formatting.
+* text=auto eol=lf
+
+# Binary. Never touch these.
+*.pcm binary
+*.png binary
+*.jpg binary
+*.ico binary
+
+# Generated — collapse in diffs and reviews.
+package-lock.json linguist-generated=true -diff

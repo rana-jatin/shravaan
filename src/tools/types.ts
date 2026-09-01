@@ -163,12 +163,7 @@ export type ToolCall = {
 };
 
 export type ToolErrorCode =
-  | "timeout"
-  | "upstream_error"
-  | "not_entitled"
-  | "invalid_args"
-  | "unavailable"
-  | "unknown_tool";
+  "timeout" | "upstream_error" | "not_entitled" | "invalid_args" | "unavailable" | "unknown_tool";
 
 export type ToolResult =
   | {
@@ -195,11 +190,7 @@ export type ToolResult =
     };
 
 export type FallbackKey =
-  | "tool.timeout"
-  | "tool.unavailable"
-  | "tool.not_entitled"
-  | "tool.invalid_args"
-  | "tool.generic";
+  "tool.timeout" | "tool.unavailable" | "tool.not_entitled" | "tool.invalid_args" | "tool.generic";
 
 /**
  * What the agent says WHILE a slow tool runs, instead of the generic filler.
@@ -213,10 +204,7 @@ export type FallbackKey =
  * its own infrastructure applies to progress just as much as to failure.
  */
 export type ProgressKey =
-  | "progress.weather"
-  | "progress.news"
-  | "progress.calendar"
-  | "progress.mail";
+  "progress.weather" | "progress.news" | "progress.calendar" | "progress.mail";
 
 /** In-flight call, mirrored into sess:{sid}:pending. */
 export type PendingCall = {

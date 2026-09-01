@@ -107,13 +107,7 @@ export class RedisSessionStore implements SessionStore {
   }
 
   async acquireLock(sid: string, token: string): Promise<boolean> {
-    const res = await this.#redis.set(
-      key.sessionLock(sid),
-      token,
-      "EX",
-      TTL.LOCK_SECONDS,
-      "NX",
-    );
+    const res = await this.#redis.set(key.sessionLock(sid), token, "EX", TTL.LOCK_SECONDS, "NX");
     return res === "OK";
   }
 

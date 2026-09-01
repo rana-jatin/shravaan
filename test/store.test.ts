@@ -49,7 +49,11 @@ const makeTurn = (tid: number, text: string, role: Turn["role"] = "user"): Turn 
 });
 
 /** The shared contract. Anything implementing SessionStore must satisfy this. */
-function contractSuite(name: string, make: () => SessionStore, cleanup?: (s: SessionStore) => Promise<void>) {
+function contractSuite(
+  name: string,
+  make: () => SessionStore,
+  cleanup?: (s: SessionStore) => Promise<void>,
+) {
   describe(`SessionStore contract: ${name}`, () => {
     it("round-trips session state", async () => {
       const s = make();

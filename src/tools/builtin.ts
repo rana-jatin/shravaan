@@ -301,9 +301,7 @@ export const forgetThis: ToolSpec = {
   deadline_ms: STORE_MS,
   handler: async (args, ctx) => {
     const { forgotten, texts } = await ctx.host.forgetFacts(String(args["subject"]));
-    return forgotten === 0
-      ? { forgotten: 0, reason: "nothing_matched" }
-      : { forgotten, texts };
+    return forgotten === 0 ? { forgotten: 0, reason: "nothing_matched" } : { forgotten, texts };
   },
 };
 
@@ -344,7 +342,9 @@ export const recall: ToolSpec = {
   deadline_ms: STORE_MS,
   handler: async (args, ctx) => {
     const hits = await ctx.host.recallFacts(String(args["query"]), 5);
-    return hits.length === 0 ? { found: 0, reason: "nothing_matched" } : { found: hits.length, facts: hits };
+    return hits.length === 0
+      ? { found: 0, reason: "nothing_matched" }
+      : { found: hits.length, facts: hits };
   },
 };
 
@@ -575,7 +575,7 @@ type GeocodeHit = {
 };
 
 export function createGetWeather(deps: WeatherDeps): ToolSpec {
-  const fetcher = deps.fetch ?? (globalThis.fetch as unknown as HttpFetch);
+  const fetcher = deps.fetch ?? globalThis.fetch;
 
   /** Old name → current name, so the geocoder can find it at all. */
   const dealias = (place: string): string => PLACE_ALIASES[place.toLowerCase()] ?? place;
@@ -681,7 +681,7 @@ export function createGetWeather(deps: WeatherDeps): ToolSpec {
 
       const cur = wx.current ?? {};
       const daily = wx.daily ?? {};
-      const first = (k: string): unknown => (Array.isArray(daily[k]) ? daily[k]![0] : undefined);
+      const first = (k: string): unknown => (Array.isArray(daily[k]) ? daily[k][0] : undefined);
       const code = typeof cur["weather_code"] === "number" ? cur["weather_code"] : -1;
 
       const place = [hit.name, hit.admin1, hit.country].filter(Boolean).join(", ");
@@ -782,7 +782,7 @@ export function parseFeedTitles(
 }
 
 export function createGetNews(deps: NewsDeps): ToolSpec {
-  const fetcher = deps.fetch ?? (globalThis.fetch as unknown as HttpFetch);
+  const fetcher = deps.fetch ?? globalThis.fetch;
   const limit = deps.limit ?? 5;
   const available = NEWS_CATEGORIES.filter((c) => deps.feeds[c]);
 
@@ -879,7 +879,9 @@ export function createRecallMood(deps: { window?: number } = {}): ToolSpec {
       const trend = await ctx.host.recentMood(window);
       // Domain outcome, not an error: nothing analysed yet is the normal state
       // of a new device and of every non-English deployment.
-      return trend === null ? { analysed: 0, reason: "nothing_recorded" } : { analysed: trend.sessions, ...trend };
+      return trend === null
+        ? { analysed: 0, reason: "nothing_recorded" }
+        : { analysed: trend.sessions, ...trend };
     },
   };
 }

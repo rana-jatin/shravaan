@@ -65,7 +65,12 @@ export const DEFAULT_ECHO_GUARD: EchoGuardOptions = {
 
 export type BargeInDecision =
   | { accept: true; reason: "confirmed" }
-  | { accept: false; reason: "not_speaking" | "half_duplex" | "suppression_window" | "awaiting_transcript" | "self_echo"; detail?: string };
+  | {
+      accept: false;
+      reason:
+        "not_speaking" | "half_duplex" | "suppression_window" | "awaiting_transcript" | "self_echo";
+      detail?: string;
+    };
 
 /** Lowercase, strip punctuation, collapse whitespace. Script-agnostic. */
 export function normalizeForComparison(text: string): string {
@@ -98,7 +103,6 @@ export class EchoGuard {
   #playbackStartedAt: number | null = null;
   /** Text handed to TTS for the current utterance — the correlation reference. */
   #spokenBuffer = "";
-  #candidateAt: number | null = null;
 
   /** Counters for the slice-2 acceptance criterion and for tuning. */
   #stats = { accepted: 0, suppressed: 0, selfEcho: 0 };
@@ -118,7 +122,6 @@ export class EchoGuard {
   /** Call when the first audio of a reply is dispatched to the device. */
   onPlaybackStart(now = Date.now()): void {
     this.#playbackStartedAt = now;
-    this.#candidateAt = null;
   }
 
   /** Call for every chunk handed to TTS — builds the correlation reference. */
@@ -130,7 +133,6 @@ export class EchoGuard {
   onPlaybackEnd(): void {
     this.#playbackStartedAt = null;
     this.#spokenBuffer = "";
-    this.#candidateAt = null;
   }
 
   /**
@@ -156,7 +158,6 @@ export class EchoGuard {
     }
 
     if (this.#opts.requireTranscript) {
-      this.#candidateAt = now;
       return { accept: false, reason: "awaiting_transcript" };
     }
 
@@ -194,7 +195,6 @@ export class EchoGuard {
       }
     }
 
-    this.#candidateAt = null;
     this.#stats.accepted++;
     return { accept: true, reason: "confirmed" };
   }
