@@ -14,7 +14,12 @@ import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
-  { ignores: ["node_modules/", "dist/", "assets/", "*.config.js"] },
+  {
+    // frontend/ is a browser app (JSX, DOM globals, its own tsconfig target)
+    // and needs its own eslint setup (react-hooks, jsx-a11y, ...) — out of
+    // scope for the starter. Everything else here is the Node-side rules.
+    ignores: ["node_modules/", "dist/", "assets/", "*.config.js", "frontend/"],
+  },
 
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -101,7 +106,7 @@ export default tseslint.config(
 
   {
     // Tests reach into internals and build deliberately malformed payloads.
-    files: ["test/**/*.ts", "scripts/**/*.ts"],
+    files: ["**/test/**/*.ts", "**/scripts/**/*.ts"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-floating-promises": "off",

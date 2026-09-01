@@ -1,0 +1,24 @@
+{
+  "name": "@sp-i/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Companion control dashboard — a wiring proof against the device WebSocket protocol, not a finished UI.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p . --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

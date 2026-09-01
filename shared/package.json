@@ -1,0 +1,13 @@
+{
+  "name": "@sp-i/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Config loading, cross-cutting types, and the http fetch contract shared by ai and backend.",
+  "exports": {
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit"
+  }
+}

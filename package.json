@@ -7,26 +7,29 @@
   "engines": {
     "node": ">=22.6.0"
   },
+  "workspaces": [
+    "shared",
+    "ai",
+    "backend",
+    "frontend"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "npm run test --workspaces --if-present",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
-    "dev": "node --experimental-strip-types --env-file=.env src/server.ts",
-    "start": "node --experimental-strip-types --env-file=.env src/server.ts",
-    "device": "node --experimental-strip-types --env-file=.env scripts/device-client.ts",
-    "render:holding": "node --experimental-strip-types --env-file=.env scripts/render-holding-audio.ts",
-    "verify:tools": "node --experimental-strip-types --env-file=.env scripts/verify-tool-calling.ts",
-    "verify:alert": "node --experimental-strip-types --env-file=.env scripts/verify-alert.ts",
-    "verify:care": "node --experimental-strip-types --env-file=.env scripts/verify-care-signals.ts",
-    "verify:asr": "node --experimental-strip-types --env-file=.env scripts/verify-asr.ts"
-  },
-  "dependencies": {
-    "ioredis": "^6.0.0",
-    "ws": "^8.18.0"
+    "dev": "npm run dev -w backend",
+    "start": "npm run start -w backend",
+    "frontend": "npm run dev -w frontend",
+    "device": "npm run device -w ai",
+    "render:holding": "npm run render:holding -w ai",
+    "verify:tools": "npm run verify:tools -w ai",
+    "verify:alert": "npm run verify:alert -w ai",
+    "verify:care": "npm run verify:care -w ai",
+    "verify:asr": "npm run verify:asr -w ai"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

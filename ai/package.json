@@ -1,0 +1,28 @@
+{
+  "name": "@sp-i/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The turn-loop pipeline: orchestrator, ASR/LLM/TTS providers, tools, memory, session store.",
+  "exports": {
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "device": "node --experimental-strip-types --env-file=../.env scripts/device-client.ts",
+    "render:holding": "node --experimental-strip-types --env-file=../.env scripts/render-holding-audio.ts",
+    "verify:tools": "node --experimental-strip-types --env-file=../.env scripts/verify-tool-calling.ts",
+    "verify:alert": "node --experimental-strip-types --env-file=../.env scripts/verify-alert.ts",
+    "verify:care": "node --experimental-strip-types --env-file=../.env scripts/verify-care-signals.ts",
+    "verify:asr": "node --experimental-strip-types --env-file=../.env scripts/verify-asr.ts"
+  },
+  "dependencies": {
+    "@sp-i/shared": "*",
+    "ioredis": "^6.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  }
+}

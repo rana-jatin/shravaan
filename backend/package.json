@@ -1,0 +1,21 @@
+{
+  "name": "@sp-i/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Protocol, boot order, and socket lifecycle around the ai pipeline.",
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "dev": "node --experimental-strip-types --env-file=../.env src/server.ts",
+    "start": "node --experimental-strip-types --env-file=../.env src/server.ts"
+  },
+  "dependencies": {
+    "@sp-i/ai": "*",
+    "@sp-i/shared": "*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  }
+}

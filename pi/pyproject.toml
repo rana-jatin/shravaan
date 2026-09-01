@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pi-client"
+version = "0.1.0"
+description = "The real device: mic in / speaker out over the SP-I device WebSocket protocol, plus onboard sensors."
+requires-python = ">=3.11"
+dependencies = ["websockets>=13.0", "smbus2>=0.4.3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["pi_client"]

@@ -9,14 +9,52 @@ this file and `docs/` disagree, `docs/` is right and this file is stale.
 
 ## What this is
 
-A multilingual companion voice agent. A person talks to a dedicated device; the
-device streams PCM to this server over a WebSocket; the server runs
-ASR → LLM → TTS and streams audio back. It speaks 11 Indian languages, remembers
-across days, and lets you switch language mid-conversation.
+A multilingual companion voice agent, plus the physical device and dashboard
+around it. A person talks to a dedicated device (a Raspberry Pi, `pi/`); it
+streams PCM to the `backend` server over a WebSocket; `backend` calls into the
+`ai` package, which runs ASR → LLM → TTS and streams audio back. It speaks 11
+Indian languages, remembers across days, and lets you switch language
+mid-conversation. `frontend/` is a companion control dashboard, still a
+wiring-proof starter.
+
+An npm workspaces monorepo: `shared`, `ai`, `backend`, `frontend` are npm
+packages (`package.json` each); `pi/` is a separate Python package (its own
+`pyproject.toml`), not an npm workspace member, meant to run on the Pi itself.
+See **Repo layout** below.
 
 TypeScript on Node ≥ 22.6, run directly with `--experimental-strip-types`.
-**There is no build step.** No bundler, no `dist/`, no transpile. `tsc` is a
-checker, not a compiler (`noEmit`).
+**There is no build step in `shared`/`ai`/`backend`.** No bundler, no `dist/`,
+no transpile. `tsc` is a checker, not a compiler (`noEmit`). `frontend/` is a
+normal Vite app and does bundle for production — that constraint is about the
+Node packages, not the browser one.
+
+---
+
+## Repo layout
+
+```
+shared/    config loading, cross-cutting types, the http fetch contract
+ai/        the turn-loop pipeline — orchestrator, ASR/LLM/TTS providers,
+           tools, memory, session store. Nearly every test lives here.
+backend/   server.ts (protocol/socket lifecycle) + composition/ (the DI root)
+frontend/  React + Vite + TS dashboard starter
+pi/        Python — the real device: mic in/speaker out, onboard sensors
+```
+
+`shared → ai → backend` is one-way: `ai` never imports from `backend`, and
+`shared` never imports from either. Cross-package imports are bare specifiers
+(`@sp-i/shared/config/env.ts`, `@sp-i/ai/orchestrator/session.ts`) resolved
+through each package's `package.json#exports` — a wildcard mapping straight to
+`.ts` sources, not a build. `frontend` and `pi` talk to `backend` only over
+the device WebSocket protocol documented at the top of
+`ai/scripts/device-client.ts`; neither imports Node-side code.
+
+Almost everything that isn't `server.ts`/`composition/` lives in `ai/` —
+including `store/` (session working memory), because `orchestrator/session.ts`
+depends on it directly. That's not a compromise; it's what the import graph
+actually looks like. `docs/01-architecture.md` predates the package split and
+stays product-level, not file-level — this file is the only place the split
+itself is documented, for now.
 
 ---
 
@@ -24,16 +62,20 @@ checker, not a compiler (`noEmit`).
 
 ```bash
 npm run check      # format:check + lint + typecheck + test — what CI runs
-npm test           # 616 tests, no credentials, no network
-npm run typecheck  # tsc --noEmit
-npm run lint       # eslint (--fix to apply)
+npm test           # runs test --workspaces (ai + backend); no credentials, no network
+npm run typecheck  # tsc --noEmit, per workspace package
+npm run lint       # eslint (--fix to apply) — one root config, all Node packages
 npm run format     # prettier (format:check to verify)
-npm run dev        # the server, on :8080
-npm run device     # the device client: mic in, speaker out (needs ffmpeg)
+npm run dev        # the backend server, on :8080 (npm run dev -w backend)
+npm run device     # the laptop device client: mic in, speaker out (npm run device -w ai, needs ffmpeg)
+npm run frontend   # the dashboard dev server (npm run dev -w frontend)
 ```
 
-`npm run verify:*` scripts talk to live providers and need real keys. They are
-deliberately outside `check`.
+Any script also runs directly against one package: `npm run <script> -w ai`,
+`-w backend`, `-w shared`, `-w frontend`. `pi/` is not npm — see `pi/README.md`.
+
+`npm run verify:*` scripts (now `-w ai`) talk to live providers and need real
+keys. They are deliberately outside `check`.
 
 **Run `npm run check` before every commit.** Not `npm test` alone: the lint and
 format gates catch a different class of problem, and a commit that skips them
@@ -44,33 +86,39 @@ tends to be followed by a commit that fixes them.
 ## Architecture
 
 ```
-device ──ws──▶ server.ts ──▶ Session (the turn loop)
-                 │              │
-                 │              ├─▶ providers/  Sarvam ASR/LLM/TTS, Deepgram
-                 │              ├─▶ tools/      function calling
-                 │              ├─▶ store/      working memory (Redis or in-proc)
-                 │              └─▶ mem:writes ──▶ memory/worker.ts ──▶ long-term
-                 └─▶ composition/  builds all of the above at boot
+pi/ ──ws──▶ backend/server.ts ──▶ ai/orchestrator Session (the turn loop)
+                 │                     │
+                 │                     ├─▶ ai/providers  Sarvam ASR/LLM/TTS, Deepgram
+                 │                     ├─▶ ai/tools      function calling
+                 │                     ├─▶ ai/store      working memory (Redis or in-proc)
+                 │                     └─▶ mem:writes ──▶ ai/memory/worker.ts ──▶ long-term
+                 └─▶ backend/composition/  builds all of the above at boot,
+                                            from ai/ + shared/config
 ```
 
 **The layering, and it points one way.**
 
-| Layer | Rule |
-|---|---|
-| `domain/` | Pure. No I/O, no clients, no config reads. Fully unit-tested. |
-| `providers/`, `store/` | Everything that leaves the process, behind an interface. |
-| `tools/` | The model's function-calling surface. |
-| `orchestrator/` | The turn loop. Depends on interfaces, never on concrete providers. |
-| `composition/` | The only place that picks implementations. |
-| `server.ts` | Protocol, boot order, socket lifecycle. |
+| Layer | Package | Rule |
+|---|---|---|
+| `domain/` | `shared/` (cross-cutting) or `ai/` (turn-loop-specific) | Pure. No I/O, no clients, no config reads. Fully unit-tested. |
+| `providers/`, `store/` | `ai/` | Everything that leaves the process, behind an interface. |
+| `tools/` | `ai/` | The model's function-calling surface. |
+| `orchestrator/` | `ai/` | The turn loop. Depends on interfaces, never on concrete providers. |
+| `composition/` | `backend/` | The only place that picks implementations. |
+| `server.ts` | `backend/` | Protocol, boot order, socket lifecycle. |
 
-`domain/` importing from `providers/` is a smell. There is currently one
-instance — `domain/radio-catalogue.ts` does network I/O and should move to
-`providers/`.
+`domain/` importing from `providers/` is a smell. `domain/radio-catalogue.ts`
+used to be the one instance — it did network I/O from inside `domain/` — and
+has since moved to `ai/src/providers/radio-catalogue.ts`. If you find another,
+move it the same way.
 
 **No import cycles.** There were three (type-only, in `tools/`) and they are
 gone. Keep it that way; a cycle usually means a type is defined next to one of
-its producers instead of next to its consumer.
+its producers instead of next to its consumer. The package boundaries add a
+second way to get this wrong: `ai/` reaching into `backend/` (even by mistake,
+via a relative path escaping the package) would create a cycle with
+`backend → ai`. There is no lint rule enforcing this yet — it's a discipline,
+not a guarantee.
 
 ---
 
@@ -88,16 +136,17 @@ dependency — otherwise you have made a piece of the system untestable, and
 `spoken_fallback_key`, and every key costs eleven translations — so modelling
 "there is nothing to repeat" as an error would let the translation backlog, not
 the engineering, decide how many tools this product can carry. Read the header
-of `src/tools/builtin.ts` before adding a tool.
+of `ai/src/tools/builtin.ts` before adding a tool.
 
 **Unconfigured means unregistered means never described to the user.** An agent
 that offers the weather and then cannot fetch it is worse than one that never
 mentioned it. External tools are factories, registered only where a deployment
-configured them. See `src/tools/external.ts`.
+configured them. See `ai/src/tools/external.ts`.
 
 **Config is nested by concern** — `cfg.weather.apiBase`, `cfg.mail.smtp.host`.
-Validate at boot and fail there, not on the first session. `.env.example` is
-kept in sync with `env.ts` by hand; if you add a variable, document it there.
+Validate at boot and fail there, not on the first session. `.env.example` (at
+repo root, covering every package) is kept in sync with `shared/src/config/env.ts`
+by hand; if you add a variable, document it there.
 
 **Residency is a decision, not a default.** Every hop is Sarvam, in India, on
 purpose. Anything that relocates a user's voice or words out of the country —
@@ -115,22 +164,27 @@ paraphrase the numbers away.
 ## Things that will surprise you
 
 - **`mem:writes` has a Redis implementation that is not wired.**
-  `RedisMemWriteStream` implements the `docs/02` §3 spec and `server.ts` never
-  selects it, so the stream is in-process even with `REDIS_URL` set. Tested, and
-  documented at both ends. Wiring it is a one-line change and a behaviour change.
-- **`session.ts` is ~1600 lines on purpose.** The turn loop, barge-in, tool
-  rounds and the degradation ladder are one machine. Pieces with a real seam
-  were extracted; `#openAsr` touches fourteen pieces of private state and was
-  deliberately left alone.
+  `RedisMemWriteStream` implements the `docs/02` §3 spec and `backend/server.ts`
+  never selects it, so the stream is in-process even with `REDIS_URL` set.
+  Tested, and documented at both ends. Wiring it is a one-line change and a
+  behaviour change.
+- **`ai/src/orchestrator/session.ts` is ~1600 lines on purpose.** The turn loop,
+  barge-in, tool rounds and the degradation ladder are one machine. Pieces with
+  a real seam were extracted; `#openAsr` touches fourteen pieces of private
+  state and was deliberately left alone.
 - **Never cast to `Config`; use `testConfig()`.** Two fixtures once built one
   with `as unknown as Config`, and the nested-config migration typechecked clean
   while thirteen tests failed for exactly that reason. Both now go through
-  `testConfig()`, and eslint rejects the cast — so a config rename fails the
-  build at the fixture instead of at runtime.
+  `testConfig()` (`ai/test/helpers.ts`), and eslint rejects the cast — so a
+  config rename fails the build at the fixture instead of at runtime.
 - **`LOG_LEVEL` does nothing.** It is documented in `.env.example` and marked
   NOT IMPLEMENTED. `log()` writes every line it is given.
-- **`DEVICE_FRAME_MS` and `MUSIC_DUCK_VOLUME` are read by the device client**,
-  not the server.
+- **`DEVICE_FRAME_MS` and `MUSIC_DUCK_VOLUME` are read by the device clients**
+  (`ai/scripts/device-client.ts` and `pi/pi_client/main.py`), not the server.
+- **`HOLDING_AUDIO_DIR` defaults to `../ai/assets/holding`**, relative to
+  `backend/`'s cwd — where `npm run dev` launches the server from. Overriding
+  it for some other launch method means recomputing that relative path from
+  wherever the process actually starts.
 - **The Redis store contract suite has never been executed.** It is written and
   skipped unless `REDIS_URL` is set. Run it before trusting that path.
 - **Nine of eleven languages have placeholder spoken copy.** The server warns at
@@ -138,6 +192,11 @@ paraphrase the numbers away.
 - **`SYSTEM_PROMPT`'s tuning was measured on a model we no longer run.** The
   numbers in its comment are for `sarvam-105b`; we run
   `sarvam-105b-conversations`. Re-tuning is open work.
+- **`frontend/` and `pi/` are wiring-proof starters, not products.** The
+  frontend shows connection status against the device protocol; `pi_client`
+  does the mic/speaker/sensor plumbing with mock fallbacks off-device. Neither
+  makes a product decision (what the dashboard shows, which sensors ship) —
+  those are still open.
 
 ---
 

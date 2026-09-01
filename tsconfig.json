@@ -1,22 +1,9 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "lib": ["ES2023"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "noEmit": true,
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "types": ["node"],
-    "verbatimModuleSyntax": true,
-    "erasableSyntaxOnly": true
-  },
-  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+  // Solution-style root: each workspace package owns its own tsconfig.json
+  // (extending tsconfig.base.json) and is typechecked independently via
+  // `tsc -p <package> --noEmit`. This file exists so editors opening a file
+  // outside any package still get sane compiler options; it has nothing to
+  // include on its own.
+  "extends": "./tsconfig.base.json",
+  "include": []
 }
