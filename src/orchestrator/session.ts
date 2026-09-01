@@ -16,7 +16,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Config } from "../config/env.ts";
 import { resolveCopy } from "../copy/refusals.ts";
 import { resolveFallback, resolveFiller, resolveProgress } from "../copy/fillers.ts";
 import {
@@ -48,17 +47,8 @@ import type {
   Turn,
   TurnPhase,
 } from "../domain/types.ts";
-import type { LongTermStore } from "../memory/long-term-store.ts";
 import type { AsrClient } from "../providers/asr-client.ts";
-import {
-  createAsr,
-  createLlm,
-  createTts,
-  type AsrFactory,
-  type AsrSpec,
-  type LlmFactory,
-  type TtsFactory,
-} from "../providers/factories.ts";
+import { createAsr, createLlm, createTts, type AsrSpec } from "../providers/factories.ts";
 import {
   RateLimitError,
   EmptyCompletionError,
@@ -69,173 +59,28 @@ import {
   type ToolChoice,
 } from "../providers/llm-client.ts";
 import type { TtsClient } from "../providers/tts-client.ts";
-import type { HoldingAudio } from "../audio/holding-audio.ts";
 import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
-import type { MemWriteStream } from "../memory/stream.ts";
 import { matchMediaIntent } from "../copy/stop-intent.ts";
 import { EMERGENCY_ACK, EMERGENCY_FAILED, matchEmergency } from "../copy/emergency-intent.ts";
-import type { EmergencyAlerter } from "../tools/emergency.ts";
 import { ToolExecutor } from "../tools/executor.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
 import type { SessionToolHost, ToolResult } from "../tools/types.ts";
+import {
+  GOODBYE_DRAIN_MS,
+  LLM_FILLER_AFTER_MS,
+  MAX_ASR_REOPENS,
+  MAX_LLM_TURN_FAILURES,
+  MAX_TOOL_ROUNDS,
+  type SessionDeps,
+} from "./session-deps.ts";
+import { buildMessages } from "./prompt.ts";
+import { MediaController } from "./media-controller.ts";
 
-export type DeviceLink = {
-  sendAudio(pcm: Buffer): void;
-  sendControl(msg: Record<string, unknown>): void;
-  close(reason: string): void;
-};
-
-export type SessionDeps = {
-  cfg: Config;
-  device: DeviceLink;
-  uid: string;
-  /** Resume an existing session within its idle window. Omit to start fresh. */
-  sid?: string | undefined;
-  store?: SessionStore | undefined;
-  /** Fire-and-forget memory writes. Omit to run without long-term memory. */
-  memStream?: MemWriteStream | undefined;
-  profile?: Profile | undefined;
-  localeHint?: LanguageCode | undefined;
-  /** Tools this deployment offers. Entitlement-filtered per user at offer time. */
-  tools?: ToolRegistry | undefined;
-  /**
-   * Long-term memory, for the two tools that read it (`recall`, `forget_this`).
-   * The turn path still never queries it on its own — see #3.9. Omit and those
-   * tools report an empty memory rather than failing.
-   */
-  longTerm?: LongTermStore | undefined;
-  /** Fetches JSON context from our backend. Read-only to the agent. */
-  fetchContext?: ((uid: string) => Promise<JsonContext | null>) | undefined;
-  /**
-   * Pre-rendered apology audio for a TTS outage — the one message that cannot be
-   * synthesised, because synthesis is what broke (slice 8).
-   */
-  holdingAudio?: HoldingAudio | undefined;
-  /**
-   * Emergency contacts. Omit and the alarm path is inert — both the local
-   * matcher and the `raise_alarm` tool — because a companion that recognises
-   * "help" and has nowhere to send it is worse than one that does not listen
-   * for it: it would say help is coming when nothing is.
-   */
-  alerter?: EmergencyAlerter | undefined;
-  log?: (level: string, msg: string, extra?: Record<string, unknown>) => void;
-
-  /**
-   * The provider seam. Defaults to the real clients; tests pass fakes.
-   *
-   * Without these, constructing a `Session` opens live WebSockets to Sarvam, and
-   * the most intricate logic in the system — the turn loop, barge-in, the filler
-   * policy, the echo-guard lifecycle — can only be exercised by hand. See
-   * docs/07-defect-register.md §9.
-   */
-  makeAsr?: AsrFactory | undefined;
-  makeTts?: TtsFactory | undefined;
-  makeLlm?: LlmFactory | undefined;
-  /**
-   * Clock and jitter for the LLM retry path. Real time and `Math.random` by
-   * default.
-   *
-   * Injected because `LLM_RETRY` uses full jitter, so the first delay is uniform
-   * over [0, 250 ms) — and the retry filler fires only once
-   * `elapsedMs + delayMs` crosses LLM_FILLER_AFTER_MS. Against real jitter that
-   * is a coin toss, so "says one thing after 600 ms of silence" is not otherwise
-   * assertable without both waiting and flaking. `withBackoff` already takes all
-   * three (src/domain/backoff.ts); this is only a way to reach them.
-   */
-  clock?:
-    | {
-        now?: (() => number) | undefined;
-        sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
-        rand?: (() => number) | undefined;
-      }
-    | undefined;
-};
-
-/**
- * Bounded so a model that keeps calling tools cannot hold a live conversation
- * open indefinitely. The user is waiting in real time.
- */
-const MAX_TOOL_ROUNDS = 3;
-
-/**
- * How long a retrying turn may stay silent before we say something. Below this
- * the retry is invisible and a filler would only make a fast turn feel slow;
- * above it the user is sitting in dead air wondering if we are still here.
- */
-const LLM_FILLER_AFTER_MS = 600;
-
-/** Consecutive ASR socket failures before we stop reconnecting and admit it. */
-const MAX_ASR_REOPENS = 4;
-
-/**
- * Consecutive turns that produce nothing before we stop claiming to be a
- * conversation. Three, not one: a 429 is per-account and transient, and closing
- * a companion session over one unlucky minute is its own failure.
- */
-const MAX_LLM_TURN_FAILURES = 3;
-
-/**
- * Time for the closing message to actually reach the device before teardown.
- * Generous on purpose: cutting our own apology off mid-word to save three
- * seconds is the exact failure this whole slice exists to avoid.
- */
-const GOODBYE_DRAIN_MS = 4000;
-
-/**
- * The stable prefix. Kept byte-identical across turns so Sarvam's cached-input
- * tier applies — see #profileBlock, which appends to it rather than editing it.
- *
- * THE LAST TWO LINES ARE LOAD-BEARING AND WERE ARRIVED AT BY MEASUREMENT.
- *
- * A tool call that streams no text leaves the user in silence until the result
- * arrives. The model answering that itself is strictly better than our filler:
- * it is specific to what was asked, and it is fluent in all eleven languages
- * where nine of our own progress lines are still placeholder text.
- *
- * Getting it took more than asking politely. Measured, preamble rate over runs
- * that actually called a tool:
- *
- *   no instruction at all                        0/9
- *   polite instruction, mid-prompt               0/3
- *   forceful imperative alone                    1/3
- *   few-shot priming messages alone              0/3
- *   few-shot priming + forceful imperative       6/8
- *   forceful imperative + inline example         7/9   ← this
- *
- * Two findings worth keeping. Describing the behaviour does almost nothing;
- * describing it forcefully AND showing it works. And the example does not need
- * to be a real priming message — an inline one performs the same and avoids
- * putting an invented exchange into the conversation history, where the model
- * could later refer back to a day that never happened.
- *
- * At ~78% this is an improvement, not a guarantee. Roughly one tool turn in four
- * still starts in silence, which is why the filler floor in `speakFiller`
- * remains and must not be removed on the strength of this.
- *
- * ⚠ EVERY FIGURE ABOVE WAS MEASURED ON `sarvam-105b`, WHICH WE NO LONGER RUN.
- *
- * Re-measured twice on `sarvam-105b-conversations` with this exact prompt and
- * the same nine asks: **2/9 — 22%**, identical across both runs. Both preambles
- * were the Hindi asks; all five English asks called silently. The prompt is
- * tuned to a model we replaced, and re-tuning it against this one is open work.
- *
- * It matters much less than the inversion suggests, because the silence it
- * covers collapsed with it: an un-preambled tool turn is now quiet for a median
- * of 1.05 s (0.64–1.73) against ~12.8 s before. The filler floor still stands —
- * it is now carrying four tool turns in five rather than one in five.
- */
-export const SYSTEM_PROMPT = [
-  "You are a warm, attentive companion. Keep replies short and conversational —",
-  "one or two sentences unless asked for more. You are being spoken aloud, so",
-  "avoid lists, markdown, and anything that only works on a page.",
-  "Reply in the same language the user is speaking. If they mix languages,",
-  "mix them back naturally.",
-  "IMPORTANT: never call a tool silently. Before every tool call you must first",
-  "write one short spoken sentence telling the user what you are about to do,",
-  "then make the call. For example, asked what day it is, you would say",
-  '"Let me have a look." and call get_time in the same turn — the sentence',
-  "first, then the call.",
-].join(" ");
+// Re-exported so server.ts, the tests and scripts/ keep importing these from
+// the module they have always come from. Splitting the file is not a reason to
+// break every caller.
+export { SYSTEM_PROMPT } from "./session-deps.ts";
+export type { DeviceLink, SessionDeps } from "./session-deps.ts";
 
 export class Session {
   readonly sid: string;
@@ -269,9 +114,9 @@ export class Session {
   /**
    * What is playing on the device, if anything. Not a TurnPhase yet — see the
    * note in #onFinal. A formal `media_playing` phase belongs in turn-state.ts,
-   * but that file is shared and this lands first as a session-local flag.
+   * but that file is shared and this lands first as session-local state.
    */
-  #media: { title: string; startedAt: number; volume: number } | null = null;
+  readonly #media: MediaController;
   /** Live TTS pace, adjustable mid-conversation by the `set_speaking_pace` tool. */
   #pace: number;
   /**
@@ -301,6 +146,11 @@ export class Session {
     this.#store = deps.store ?? new NullSessionStore();
     this.#tools = deps.tools ?? null;
     this.#pace = deps.cfg.ttsPace;
+    this.#media = new MediaController({
+      sendControl: (msg) => deps.device.sendControl(msg),
+      defaultVolume: deps.cfg.musicVolume,
+      log: (level, msg, extra) => this.#log(level, msg, extra),
+    });
     this.#executor = this.#tools
       ? new ToolExecutor({
           registry: this.#tools,
@@ -504,79 +354,28 @@ export class Session {
 
       timezone: () => this.#jsonContext?.identity.timezone ?? this.#d.cfg.defaultTimezone,
 
-      playMedia: (req) => {
-        // Replaces whatever was playing. Two stations at once is the one
-        // outcome nobody could recover from by talking.
-        if (this.#media) this.#stopMedia("replaced");
-        this.#media = { title: req.title, startedAt: Date.now(), volume: this.#d.cfg.musicVolume };
-        // Volume travels with the request: there is no ducking, so the ONE
-        // chance to make the microphone's job possible is at start.
-        this.#d.device.sendControl({
-          type: "play_media",
-          volume: this.#media.volume,
-          ...req,
-        });
-        this.#log("info", "media started", { source: req.source, title: req.title });
-      },
+      playMedia: (req) => this.#media.start(req),
 
-      stopMedia: (reason: string) => this.#stopMedia(reason),
+      stopMedia: (reason: string) => this.#media.stop(reason),
     };
-  }
-
-  /**
-   * Stop media and tell the device. Idempotent — `end_conversation`, a barge-in
-   * and an explicit "stop" can all arrive for the same track.
-   */
-  #stopMedia(reason: string): void {
-    if (!this.#media) return;
-    const { title, startedAt } = this.#media;
-    this.#media = null;
-    this.#d.device.sendControl({ type: "stop_media" });
-    this.#log("info", "media stopped", { title, reason, played_ms: Date.now() - startedAt });
-  }
-
-  /**
-   * Louder or quieter, in steps.
-   *
-   * Steps rather than a number for the same reason `set_speaking_pace` uses
-   * them: "sixty percent" is not a thing anyone says out loud. Clamped, and the
-   * floor is deliberately above zero — silent-but-playing is indistinguishable
-   * from broken to someone listening, and they would have said "stop" if they
-   * meant stop.
-   */
-  #adjustMediaVolume(direction: "quieter" | "louder"): void {
-    if (!this.#media) return;
-    const before = this.#media.volume;
-    const next = Math.max(15, Math.min(100, before + (direction === "louder" ? 20 : -20)));
-    this.#media.volume = next;
-    this.#d.device.sendControl({ type: "set_media_volume", volume: next });
-    this.#log("info", "media volume", {
-      direction,
-      before,
-      after: next,
-      at_limit: next === before,
-    });
   }
 
   /** True while a station or track is playing on the device. */
   get mediaPlaying(): boolean {
-    return this.#media !== null;
+    return this.#media.playing;
   }
 
   /**
    * The device reports playback finished on its own — the stream ended, dropped,
    * or every fallback URL failed.
    *
-   * WITHOUT THIS THE SESSION GOES DEAF. `#onFinal` returns early while `#media`
-   * is set, so a track that ends without telling us leaves the flag stuck and
+   * WITHOUT THIS THE SESSION GOES DEAF. `#onFinal` returns early while media is
+   * playing, so a track that ends without telling us leaves the flag stuck and
    * every later transcript is swallowed. The user talks and nothing happens,
    * indefinitely, and the only escape is guessing that "stop" still works.
    */
   mediaEnded(): void {
-    if (!this.#media) return;
-    const { title, startedAt } = this.#media;
-    this.#media = null;
-    this.#log("info", "media ended on device", { title, played_ms: Date.now() - startedAt });
+    this.#media.endedOnDevice();
   }
 
   #resolveSeed() {
@@ -1041,18 +840,18 @@ export class Session {
     // `restrictListeningDuringMedia` for a deployment that finds it intolerable.
     // The real fix is ducking the music on speech_start, which needs the device
     // side and does not exist yet.
-    if (this.#media) {
+    if (this.#media.playing) {
       const intent = matchMediaIntent(text, this.#state.language);
       if (intent === "stop") {
-        this.#stopMedia("user_asked");
+        this.#media.stop("user_asked");
         return;
       }
       if (intent === "quieter" || intent === "louder") {
-        this.#adjustMediaVolume(intent);
+        this.#media.adjustVolume(intent);
         return;
       }
     }
-    if (this.#media && this.#d.cfg.restrictListeningDuringMedia) {
+    if (this.#media.playing && this.#d.cfg.restrictListeningDuringMedia) {
       this.#log("info", "ignored while media playing", { text: text.slice(0, 60) });
       return;
     }
@@ -1123,73 +922,6 @@ export class Session {
     } catch (err) {
       this.#markStoreDegraded(err);
     }
-  }
-
-  /**
-   * Build the LLM window: oldest first, capped, with each turn's own language.
-   *
-   * `language` is per turn rather than per session on purpose — a code-mixing
-   * user produces a mixed window, and the model should see that rather than a
-   * flattened single value (docs/02-data-contracts.md section 2.4).
-   */
-  #buildMessages(userText: string): ChatMessage[] {
-    const history = [...this.#turns]
-      .reverse()
-      .filter((t) => t.text.trim() !== "")
-      .map((t) => ({
-        role: t.role === "user" ? ("user" as const) : ("assistant" as const),
-        content: t.text,
-      }));
-
-    // The current turn was just recorded, so it is already the last entry.
-    const alreadyIncluded =
-      history.length > 0 &&
-      history[history.length - 1]!.role === "user" &&
-      history[history.length - 1]!.content === userText;
-
-    return [
-      { role: "system" as const, content: SYSTEM_PROMPT + this.#profileBlock() },
-      ...history,
-      ...(alreadyIncluded ? [] : [{ role: "user" as const, content: userText }]),
-    ];
-  }
-
-  /**
-   * The only long-term memory on the turn path. Capped upstream in
-   * buildProfile(); this just renders it.
-   *
-   * Kept as a stable suffix on the system message so the prefix stays
-   * byte-identical across turns — Sarvam prices cached input at roughly a third
-   * of fresh input, which is only reachable if we do not churn the prefix.
-   */
-  #profileBlock(): string {
-    const p = this.#profile;
-    if (!p) return "";
-
-    const parts: string[] = [];
-    if (p.facts.length > 0) {
-      parts.push(`What you know about them:\n${p.facts.map((f) => `- ${f.text}`).join("\n")}`);
-    }
-    if (p.open_threads.length > 0) {
-      parts.push(
-        `Left unfinished last time:\n${p.open_threads.map((t) => `- ${t.text}`).join("\n")}`,
-      );
-    }
-    if (p.recent_episodes.length > 0) {
-      parts.push(
-        `Recently:\n${p.recent_episodes
-          .slice(0, 3)
-          .map((e) => `- ${e.summary}`)
-          .join("\n")}`,
-      );
-    }
-    if (parts.length === 0) return "";
-
-    return (
-      `\n\n${parts.join("\n\n")}\n\n` +
-      `Draw on this only when it is genuinely relevant. Do not recite it, and do not ` +
-      `open by listing what you remember — that is unsettling rather than warm.`
-    );
   }
 
   /**
@@ -1280,7 +1012,7 @@ export class Session {
     this.#turnAbort = abort;
     this.#chunker.reset();
 
-    const messages = this.#buildMessages(userText);
+    const messages = buildMessages(this.#turns, this.#profile, userText);
 
     // Declared out here so the interrupted and failed paths can both record what
     // was actually said. The window must reflect the conversation the user
@@ -1723,7 +1455,7 @@ export class Session {
       text: text.slice(0, 120),
     });
 
-    if (this.#media) this.#stopMedia("emergency");
+    if (this.#media.playing) this.#media.stop("emergency");
 
     const language = this.#state.language;
     const ack = EMERGENCY_ACK[language] ?? EMERGENCY_ACK["en-IN"]!;
@@ -1813,7 +1545,7 @@ export class Session {
     // Before anything else. A session that ends while a station plays must not
     // leave the device playing to an empty room with nothing left to stop it —
     // the socket is about to go, and with it the only route to stop_media.
-    this.#stopMedia(`session_${reason}`);
+    this.#media.stop(`session_${reason}`);
     this.#turnAbort?.abort();
     if (this.#asrReopenTimer) clearTimeout(this.#asrReopenTimer);
     this.#asrReopenTimer = null;
