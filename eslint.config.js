@@ -65,6 +65,30 @@ export default tseslint.config(
       // Template literals over provider values are how every log line is built.
       "@typescript-eslint/restrict-template-expressions": "off",
 
+      /**
+       * Never fabricate a Config.
+       *
+       * `{ sarvam: { ... } } as unknown as Config` in a test fixture turns off
+       * exactly the checking that makes a config rename safe. Two fixtures did
+       * it, and when Config was reshaped into sections `tsc --noEmit` reported
+       * the tree clean while thirteen tests threw `Cannot read properties of
+       * undefined`. The suite caught what the typechecker had been told to
+       * ignore — which is the wrong way round, because tsc is the gate that runs
+       * against every call site rather than only the ones a test exercises.
+       *
+       * Use `testConfig()` from test/helpers.ts. It starts from `loadConfig()`,
+       * so the shape is real by construction and a rename breaks the build.
+       */
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: 'TSAsExpression[typeAnnotation.typeName.name="Config"]',
+          message:
+            "Do not cast to Config — it disables the checking a config rename depends on. " +
+            "Use testConfig() from test/helpers.ts, which builds a real Config from loadConfig().",
+        },
+      ],
+
       // Every hit is the same deliberate pattern: a value parsed out of an
       // unknown provider payload, coerced defensively before it is logged or
       // spoken — `String(msg["transcript"] ?? "")`. The rule is right that a

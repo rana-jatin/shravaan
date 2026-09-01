@@ -22,15 +22,24 @@ import {
 } from "../src/providers/sarvam-llm.ts";
 import { ThinkFilter } from "../src/domain/think-filter.ts";
 import { LLM_RETRY, withBackoff } from "../src/domain/backoff.ts";
-import type { Config } from "../src/config/env.ts";
+import { testConfig } from "./helpers.ts";
 
-const CFG = {
-  sarvam: {
-    apiBase: "https://sarvam.test",
-    apiKey: "test-key",
-    llmModel: "test-model",
-  },
-} as unknown as Config;
+/**
+ * A REAL Config, not a hand-built stand-in.
+ *
+ * This was `{ sarvam: {...} } as unknown as Config`, and that cast is exactly
+ * as dangerous as it looks: it turns off the checking that a config rename
+ * depends on. When Config was nested, tsc reported this file clean while all
+ * thirteen tests in it threw `Cannot read properties of undefined`. The suite
+ * caught what the typechecker had been told to ignore.
+ *
+ * testConfig() starts from loadConfig() with the environment swapped out, so
+ * the shape is the real one by construction and a rename breaks the build here
+ * the way it breaks it everywhere else.
+ */
+const CFG = testConfig({
+  sarvam: { apiBase: "https://sarvam.test", apiKey: "test-key", llmModel: "test-model" },
+});
 
 // --- SSE plumbing -----------------------------------------------------------
 

@@ -91,23 +91,44 @@ export function testConfig(over: ConfigOverride = {}): Config {
   const saved = process.env;
   try {
     process.env = { SARVAM_API_KEY: "test-key-never-used-no-sockets-are-opened" };
-    const base = loadConfig();
-    const out: Record<string, unknown> = { ...base };
-    for (const [key, v] of Object.entries(over)) {
-      const cur = (base as Record<string, unknown>)[key];
-      const mergeable =
-        v !== null &&
-        typeof v === "object" &&
-        !Array.isArray(v) &&
-        cur !== null &&
-        typeof cur === "object" &&
-        !Array.isArray(cur);
-      out[key] = mergeable ? { ...cur, ...v } : v;
-    }
-    return out as Config;
+    return mergeConfig(loadConfig(), over);
   } finally {
     process.env = saved;
   }
+}
+
+function isSection(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Merge one level down. `out` is a real Config from the first line and stays one
+ * throughout — the two assertions are on the WRITE, where TypeScript cannot see
+ * that spreading a `Partial<Config[K]>` over a `Config[K]` is still a
+ * `Config[K]` for an unresolved `K`. Nothing here can invent a shape: `over` is
+ * checked against ConfigOverride at every call site, which is the property the
+ * old `as unknown as Config` fixtures threw away.
+ */
+function mergeConfig(base: Config, over: ConfigOverride): Config {
+  const out = { ...base };
+  for (const key of Object.keys(over) as Array<keyof Config>) {
+    mergeSection(out, key, over);
+  }
+  return out;
+}
+
+/**
+ * Generic in K on purpose. Writing through `out[key]` where `key` is the whole
+ * `keyof Config` union types the target as `never` — the intersection of every
+ * section type — so the write has to be resolved one key at a time.
+ */
+function mergeSection<K extends keyof Config>(out: Config, key: K, over: ConfigOverride): void {
+  // Widened to unknown so `isSection` narrows to a spreadable record. Narrowing
+  // a generic `Config[K]` in place leaves TypeScript unable to spread it.
+  const v: unknown = over[key];
+  if (v === undefined) return;
+  const cur: unknown = out[key];
+  out[key] = (isSection(cur) && isSection(v) ? { ...cur, ...v } : v) as Config[K];
 }
 
 // ---------------------------------------------------------------------------

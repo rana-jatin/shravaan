@@ -39,7 +39,7 @@ import type { Config } from "../src/config/env.ts";
 import type { HttpFetch } from "../src/providers/http.ts";
 import type { Episode, MemWriteEvent } from "../src/domain/types.ts";
 import { createRecallMood } from "../src/tools/wellbeing.ts";
-import { fakeHost, invocation } from "./helpers.ts";
+import { fakeHost, invocation, testConfig } from "./helpers.ts";
 
 // --- fixtures ----------------------------------------------------------------
 
@@ -392,15 +392,18 @@ describe("care signals analyser: the refusals never reach the network", () => {
 
 // --- the provider ------------------------------------------------------------
 
-/** Config without touching the developer's environment. See testConfig in helpers. */
+/**
+ * Config without touching the developer's environment.
+ *
+ * Built by testConfig() rather than cast into shape: `as unknown as Config`
+ * disables the checking that makes a config rename safe, which is how the
+ * nested-Config migration typechecked clean while this file's sibling threw at
+ * runtime. See the note in test/llm-resilience.test.ts.
+ */
 const cfg = (over: Partial<Config["deepgram"]> = {}): Config =>
-  ({
-    deepgram: {
-      apiKey: "dg-test-key",
-      readBase: "https://api.deepgram.com",
-      ...over,
-    },
-  }) as unknown as Config;
+  testConfig({
+    deepgram: { apiKey: "dg-test-key", readBase: "https://api.deepgram.com", ...over },
+  });
 
 function recordingFetch(res: { ok?: boolean; status?: number; body?: string }) {
   const seen: Array<{ url: string; init: NonNullable<Parameters<HttpFetch>[1]> }> = [];
