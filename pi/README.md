@@ -21,9 +21,10 @@ package is the same idea, ported to Linux + Python, with sensors added.
 - `pi_client/sensors/climate.py` — BME280 (temperature/humidity/pressure)
   over I2C.
 
-Sensor readings are polled and logged locally (`sensor_loop` in `main.py`).
-There's no WS protocol field for them yet — that's follow-up work once
-there's a server-side consumer, not something to invent here.
+Sensor readings are published over MQTT by `sensor_loop` in `main.py`.
+Configure `DEVICE_ID` and `MQTT_BROKER_HOST` before running. An optional GPIO
+SOS button can be enabled with `SOS_BUTTON_GPIO`; it publishes a separate SOS
+event over MQTT.
 
 ## Hardware-optional by design
 
@@ -36,9 +37,9 @@ run and be testable on a laptop with no Pi attached, not just on the device.
 ## Setup
 
 ```bash
-python -m venv .venv
+cd ..
 source .venv/bin/activate       # or .venv\Scripts\activate on Windows
-pip install -e .
+pip install -e pi
 ```
 
 Needs `ffmpeg` on PATH for audio (same as the laptop device client).

@@ -31,6 +31,7 @@ import uuid
 from datetime import datetime, timezone
 
 import websockets
+import paho.mqtt.client as mqtt
 from websockets.asyncio.client import ClientConnection
 
 from pi_client.sensors.climate import Climate
@@ -71,6 +72,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="how often to poll and log IMU/climate readings",
     )
     parser.add_argument("--no-sensors", action="store_true")
+    parser.add_argument("--device-id", default=os.environ.get("DEVICE_ID"))
+    parser.add_argument("--mqtt-host", default=os.environ.get("MQTT_BROKER_HOST", "127.0.0.1"))
+    parser.add_argument("--mqtt-port", type=int, default=int(os.environ.get("MQTT_BROKER_PORT", "1883")))
+    parser.add_argument("--mqtt-username", default=os.environ.get("MQTT_USERNAME"))
+    parser.add_argument("--mqtt-password", default=os.environ.get("MQTT_PASSWORD"))
+    parser.add_argument("--mqtt-topic-prefix", default=os.environ.get("MQTT_TOPIC_PREFIX", "shravaan/devices"))
+    parser.add_argument("--sos-button", default=os.environ.get("SOS_BUTTON_GPIO"), type=int)
     return parser.parse_args(argv)
 
 
@@ -197,17 +205,46 @@ async def handle_messages(ws: ClientConnection, player: Player) -> None:
             log("unhandled control message", type=msg_type)
 
 
-async def sensor_loop(interval_s: float) -> None:
+async def sensor_loop(interval_s: float, args: argparse.Namespace) -> None:
+    if not args.device_id:
+        raise ValueError("--device-id or DEVICE_ID is required when sensors are enabled")
     imu = Imu()
     climate = Climate()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"pi-{args.device_id}")
+    if args.mqtt_username and args.mqtt_password:
+        client.username_pw_set(args.mqtt_username, args.mqtt_password)
+    client.connect(args.mqtt_host, args.mqtt_port, 60)
+    client.loop_start()
+    topic = f"{args.mqtt_topic_prefix.rstrip('/')}/{args.device_id}/telemetry"
+    sos_topic = f"{args.mqtt_topic_prefix.rstrip('/')}/{args.device_id}/sos"
     imu.open()
     climate.open()
     try:
         while True:
             reading = imu.read()
             climate_reading = climate.read()
+            event_id = str(uuid.uuid4())
+            telemetry = {
+                "event_id": event_id,
+                "device_id": args.device_id,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "temperature_c": round(climate_reading.temperature_c, 2),
+                "motion_state": "still",
+                "raw_payload": {
+                    "accel_g": reading.accel_g,
+                    "gyro_dps": reading.gyro_dps,
+                    "humidity_pct": round(climate_reading.humidity_pct, 2),
+                    "pressure_hpa": round(climate_reading.pressure_hpa, 2),
+                    "mocked": reading.mocked or climate_reading.mocked,
+                },
+            }
+            result = client.publish(topic, json.dumps(telemetry), qos=1)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                raise RuntimeError(f"MQTT publish failed with code {result.rc}")
             log(
                 "sensors",
+                event_id=event_id,
+                published_topic=topic,
                 accel_g=reading.accel_g,
                 gyro_dps=reading.gyro_dps,
                 temperature_c=round(climate_reading.temperature_c, 2),
@@ -218,6 +255,44 @@ async def sensor_loop(interval_s: float) -> None:
     finally:
         imu.close()
         climate.close()
+        client.loop_stop()
+        client.disconnect()
+
+
+def publish_sos(args: argparse.Namespace) -> None:
+    if not args.device_id:
+        raise ValueError("--device-id or DEVICE_ID is required for SOS")
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"pi-sos-{args.device_id}")
+    if args.mqtt_username and args.mqtt_password:
+        client.username_pw_set(args.mqtt_username, args.mqtt_password)
+    client.connect(args.mqtt_host, args.mqtt_port, 60)
+    topic = f"{args.mqtt_topic_prefix.rstrip('/')}/{args.device_id}/sos"
+    result = client.publish(topic, json.dumps({"source": "physical_sos_button", "recorded_at": datetime.now(timezone.utc).isoformat()}), qos=1)
+    result.wait_for_publish()
+    client.disconnect()
+
+
+async def sos_button_loop(args: argparse.Namespace) -> None:
+    if args.sos_button is None:
+        return
+    try:
+        from gpiozero import Button
+    except ImportError as exc:
+        raise RuntimeError("gpiozero is required when --sos-button is configured") from exc
+
+    button = Button(args.sos_button, pull_up=True, bounce_time=0.2)
+    loop = asyncio.get_running_loop()
+    last_press = 0.0
+    try:
+        while True:
+            await loop.run_in_executor(None, button.wait_for_press)
+            now = loop.time()
+            if now - last_press >= 2.0:
+                publish_sos(args)
+                last_press = now
+            await loop.run_in_executor(None, button.wait_for_release)
+    finally:
+        button.close()
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -233,7 +308,9 @@ async def run(args: argparse.Namespace) -> None:
 
         player = Player(args.tts_rate)
         if not args.no_sensors:
-            tasks.append(asyncio.create_task(sensor_loop(args.sensor_interval_s)))
+            tasks.append(asyncio.create_task(sensor_loop(args.sensor_interval_s, args)))
+        if args.sos_button is not None:
+            tasks.append(asyncio.create_task(sos_button_loop(args)))
         tasks.append(asyncio.create_task(capture_mic(ws, args)))
 
         try:
