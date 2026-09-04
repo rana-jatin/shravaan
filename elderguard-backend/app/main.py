@@ -10,9 +10,8 @@ from pythonjsonlogger.json import JsonFormatter
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import close_database
+from app.core.redis import set_client
 from app.mqtt.consumer import consumer
-
-redis_client: Redis | None = None
 
 
 def configure_logging() -> None:
@@ -23,16 +22,16 @@ def configure_logging() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global redis_client
-    redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
-    await redis_client.ping()
+    client = Redis.from_url(settings.redis_url, decode_responses=True)
+    await client.ping()
+    set_client(client)
     if consumer is not None:
         consumer.connect()
     yield
     if consumer is not None:
         consumer.disconnect()
-    await redis_client.aclose()
-    redis_client = None
+    set_client(None)
+    await client.aclose()
     await close_database()
 
 

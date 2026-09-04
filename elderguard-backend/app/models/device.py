@@ -3,10 +3,9 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String, func
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import GUID, Base
 
 
 class DeviceStatus(StrEnum):
@@ -18,7 +17,7 @@ class DeviceStatus(StrEnum):
 class Device(Base):
     __tablename__ = "devices"
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(GUID(), primary_key=True, default=uuid4)
     hardware_uid: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     qr_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     owner_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)

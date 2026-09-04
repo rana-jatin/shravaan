@@ -3,10 +3,9 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, Enum, Float, ForeignKey, JSON, String, func
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base
+from app.core.database import GUID, Base
 
 
 class MotionState(StrEnum):
@@ -31,8 +30,8 @@ class AlertStatus(StrEnum):
 class TelemetryRecord(Base):
     __tablename__ = "telemetry_records"
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    event_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), unique=True, index=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(GUID(), primary_key=True, default=uuid4)
+    event_id: Mapped[UUID] = mapped_column(GUID(), unique=True, index=True, default=uuid4)
     device_id: Mapped[UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     heart_rate_bpm: Mapped[float | None] = mapped_column(Float)
@@ -48,7 +47,7 @@ class TelemetryRecord(Base):
 class Alert(Base):
     __tablename__ = "alerts"
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(GUID(), primary_key=True, default=uuid4)
     device_id: Mapped[UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
     alert_type: Mapped[AlertType] = mapped_column(
         Enum(AlertType, name="alert_type", values_callable=lambda enum: [item.value for item in enum])

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db_session
+from app.core.redis import get_client
 from app.core.security import decode_token
 from app.models.device import Device
 from app.models.user import User
@@ -18,10 +19,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def get_redis() -> Redis:
-    from app.main import redis_client
-    if redis_client is None:
+    client = get_client()
+    if client is None:
         raise HTTPException(status_code=503, detail="Redis is unavailable")
-    return redis_client
+    return client
 
 
 async def enforce_rate_limit(redis: Redis, key: str, limit: int = 120, window_seconds: int = 60) -> None:

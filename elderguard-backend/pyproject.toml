@@ -1,0 +1,15 @@
+# Pytest configuration for the safety API.
+#
+# This service had no test harness at all — `pytest` and `httpx` sat in
+# requirements-dev.txt with nothing to run. Two critical defects (a dead MQTT
+# SOS path, an unauthenticated identity check) lived in that gap.
+#
+# `asyncio_mode = "auto"` means an `async def test_` needs no decorator, which
+# matters because nearly every route here is async and the ceremony would
+# otherwise be on every single test.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error::RuntimeWarning"]
