@@ -15,6 +15,8 @@ import { registerCapabilities } from "../src/capabilities/register.ts";
 import { CAPABILITIES } from "../src/capabilities/catalogue.ts";
 import type { Capability, CapabilityContext, CapabilityReport } from "../src/capabilities/types.ts";
 import { MemoryScheduleStore } from "../src/scheduler/memory-schedule-store.ts";
+import { MemoryEscalationStore } from "../src/escalation/memory-escalation-store.ts";
+import { DEFAULT_LADDER } from "../src/escalation/types.ts";
 import { testConfig } from "./helpers.ts";
 
 /** A capability that records what it was asked to do. */
@@ -43,10 +45,9 @@ function fakeCapability(
 
 describe("capability registration", () => {
   it("skips a capability this deployment has not configured", () => {
-    const wiring = registerCapabilities(testConfig(), undefined, [
-      fakeCapability("on"),
-      fakeCapability("off", { isConfigured: () => false }),
-    ]);
+    const wiring = registerCapabilities(testConfig(), undefined, {
+      capabilities: [fakeCapability("on"), fakeCapability("off", { isConfigured: () => false })],
+    });
 
     assert.deepEqual(wiring.unconfigured, ["off"]);
     assert.deepEqual(
@@ -60,15 +61,17 @@ describe("capability registration", () => {
     // The rule is about OFFERING, so a capability that cannot be served must not
     // even get the chance to construct a client or open a socket.
     let called = false;
-    registerCapabilities(testConfig(), undefined, [
-      fakeCapability("off", {
-        isConfigured: () => false,
-        register: () => {
-          called = true;
-          return { name: "off", registered: false, tools: [], detail: {} };
-        },
-      }),
-    ]);
+    registerCapabilities(testConfig(), undefined, {
+      capabilities: [
+        fakeCapability("off", {
+          isConfigured: () => false,
+          register: () => {
+            called = true;
+            return { name: "off", registered: false, tools: [], detail: {} };
+          },
+        }),
+      ],
+    });
     assert.equal(called, false);
   });
 
@@ -80,15 +83,17 @@ describe("capability registration", () => {
       (level, msg) => {
         if (level === "error") logged.push(msg);
       },
-      [
-        fakeCapability("before"),
-        fakeCapability("broken", {
-          register: () => {
-            throw new Error("credential unusable");
-          },
-        }),
-        fakeCapability("after"),
-      ],
+      {
+        capabilities: [
+          fakeCapability("before"),
+          fakeCapability("broken", {
+            register: () => {
+              throw new Error("credential unusable");
+            },
+          }),
+          fakeCapability("after"),
+        ],
+      },
     );
 
     assert.ok(wiring.tools.get("before_tool"), "capabilities before the failure survive");
@@ -98,11 +103,9 @@ describe("capability registration", () => {
   });
 
   it("registers tools in capability order, so the model sees a stable list", () => {
-    const wiring = registerCapabilities(testConfig(), undefined, [
-      fakeCapability("a"),
-      fakeCapability("b"),
-      fakeCapability("c"),
-    ]);
+    const wiring = registerCapabilities(testConfig(), undefined, {
+      capabilities: [fakeCapability("a"), fakeCapability("b"), fakeCapability("c")],
+    });
     assert.deepEqual(
       wiring.tools.all().map((t) => t.name),
       ["a_tool", "b_tool", "c_tool"],
@@ -110,52 +113,56 @@ describe("capability registration", () => {
   });
 
   it("collects contributions a capability makes to every session", () => {
-    const wiring = registerCapabilities(testConfig(), undefined, [
-      fakeCapability("emergency-ish", {
-        register: (_registry, _ctx, contributions): CapabilityReport => {
-          // The alerter is the only contribution today; any object proves the
-          // channel, and the emergency suite covers the real one.
-          contributions.alerter = { contacts: [], names: "" } as never;
-          return { name: "emergency-ish", registered: true, tools: [], detail: {} };
-        },
-      }),
-    ]);
+    const wiring = registerCapabilities(testConfig(), undefined, {
+      capabilities: [
+        fakeCapability("emergency-ish", {
+          register: (_registry, _ctx, contributions): CapabilityReport => {
+            // The alerter is the only contribution today; any object proves the
+            // channel, and the emergency suite covers the real one.
+            contributions.alerter = { contacts: [], names: "" } as never;
+            return { name: "emergency-ish", registered: true, tools: [], detail: {} };
+          },
+        }),
+      ],
+    });
     assert.ok(wiring.contributions.alerter, "the contribution reached the wiring");
   });
 
   it("disposes every capability's timers, even when one disposer throws", () => {
     const stopped: string[] = [];
-    const wiring = registerCapabilities(testConfig(), undefined, [
-      fakeCapability("first", {
-        register: () => ({
-          name: "first",
-          registered: true,
-          tools: [],
-          detail: {},
-          dispose: () => stopped.push("first"),
+    const wiring = registerCapabilities(testConfig(), undefined, {
+      capabilities: [
+        fakeCapability("first", {
+          register: () => ({
+            name: "first",
+            registered: true,
+            tools: [],
+            detail: {},
+            dispose: () => stopped.push("first"),
+          }),
         }),
-      }),
-      fakeCapability("bad", {
-        register: () => ({
-          name: "bad",
-          registered: true,
-          tools: [],
-          detail: {},
-          dispose: () => {
-            throw new Error("will not clear");
-          },
+        fakeCapability("bad", {
+          register: () => ({
+            name: "bad",
+            registered: true,
+            tools: [],
+            detail: {},
+            dispose: () => {
+              throw new Error("will not clear");
+            },
+          }),
         }),
-      }),
-      fakeCapability("last", {
-        register: () => ({
-          name: "last",
-          registered: true,
-          tools: [],
-          detail: {},
-          dispose: () => stopped.push("last"),
+        fakeCapability("last", {
+          register: () => ({
+            name: "last",
+            registered: true,
+            tools: [],
+            detail: {},
+            dispose: () => stopped.push("last"),
+          }),
         }),
-      }),
-    ]);
+      ],
+    });
 
     wiring.dispose();
     // Shutdown is not a place to throw, and one stuck timer is not a reason to
@@ -165,13 +172,15 @@ describe("capability registration", () => {
 
   it("lets an unconfigured capability still say so", () => {
     const lines: Array<{ level: string; msg: string }> = [];
-    registerCapabilities(testConfig(), (level, msg) => lines.push({ level, msg }), [
-      fakeCapability("quiet", { isConfigured: () => false }),
-      fakeCapability("loud", {
-        isConfigured: () => false,
-        unconfiguredNotice: () => ({ level: "warn", msg: "loud is off" }),
-      }),
-    ]);
+    registerCapabilities(testConfig(), (level, msg) => lines.push({ level, msg }), {
+      capabilities: [
+        fakeCapability("quiet", { isConfigured: () => false }),
+        fakeCapability("loud", {
+          isConfigured: () => false,
+          unconfiguredNotice: () => ({ level: "warn", msg: "loud is off" }),
+        }),
+      ],
+    });
 
     assert.deepEqual(lines, [{ level: "warn", msg: "loud is off" }]);
   });
@@ -337,39 +346,43 @@ describe("capabilities and the scheduler", () => {
   it("collects an occurrence handler under the capability's own name", () => {
     // Keyed by name because a Schedule stores a name: it outlives the process
     // that created it, so it cannot hold a reference to the thing that runs it.
-    const wiring = registerCapabilities(testConfig(), undefined, [
-      fakeCapability("medication", {
-        register: (): CapabilityReport => ({
-          name: "medication",
-          registered: true,
-          tools: [],
-          detail: {},
-          onOccurrence: () => {},
+    const wiring = registerCapabilities(testConfig(), undefined, {
+      capabilities: [
+        fakeCapability("medication", {
+          register: (): CapabilityReport => ({
+            name: "medication",
+            registered: true,
+            tools: [],
+            detail: {},
+            onOccurrence: () => {},
+          }),
         }),
-      }),
-      fakeCapability("quiet"),
-    ]);
+        fakeCapability("quiet"),
+      ],
+    });
 
-    assert.deepEqual([...wiring.handlers.keys()], ["medication"]);
+    assert.deepEqual([...wiring.occurrenceHandlers.keys()], ["medication"]);
   });
 
   it("takes no handler from a capability this deployment did not configure", () => {
     // The same rule as the tools: an unconfigured capability is not asked, so
     // it cannot end up on the receiving end of a reminder it cannot serve.
-    const wiring = registerCapabilities(testConfig(), undefined, [
-      fakeCapability("medication", {
-        isConfigured: () => false,
-        register: (): CapabilityReport => ({
-          name: "medication",
-          registered: true,
-          tools: [],
-          detail: {},
-          onOccurrence: () => {},
+    const wiring = registerCapabilities(testConfig(), undefined, {
+      capabilities: [
+        fakeCapability("medication", {
+          isConfigured: () => false,
+          register: (): CapabilityReport => ({
+            name: "medication",
+            registered: true,
+            tools: [],
+            detail: {},
+            onOccurrence: () => {},
+          }),
         }),
-      }),
-    ]);
+      ],
+    });
 
-    assert.equal(wiring.handlers.size, 0);
+    assert.equal(wiring.occurrenceHandlers.size, 0);
   });
 
   it("hands every capability the schedule store composition chose", () => {
@@ -377,10 +390,8 @@ describe("capabilities and the scheduler", () => {
     const schedules = new MemoryScheduleStore();
     const given: CapabilityContext[] = [];
 
-    registerCapabilities(
-      testConfig(),
-      undefined,
-      [
+    registerCapabilities(testConfig(), undefined, {
+      capabilities: [
         fakeCapability("medication", {
           register: (_registry, ctx): CapabilityReport => {
             given.push(ctx);
@@ -388,10 +399,85 @@ describe("capabilities and the scheduler", () => {
           },
         }),
       ],
-      schedules,
-    );
+      schedules: schedules,
+    });
 
     assert.equal(given[0]?.schedules, schedules);
+  });
+
+  it("collects an escalation handler separately from an occurrence handler", () => {
+    // Different questions. `onOccurrence` is "a schedule came due" and runs
+    // once; `escalation` is "still unanswered, what now" and runs every sweep.
+    // A capability may want either without the other — a hydration prompt is
+    // worth saying and not worth telling anybody's family about.
+    const wiring = registerCapabilities(testConfig(), undefined, {
+      capabilities: [
+        fakeCapability("hydration", {
+          register: (): CapabilityReport => ({
+            name: "hydration",
+            registered: true,
+            tools: [],
+            detail: {},
+            onOccurrence: () => {},
+          }),
+        }),
+        fakeCapability("medication", {
+          register: (): CapabilityReport => ({
+            name: "medication",
+            registered: true,
+            tools: [],
+            detail: {},
+            onOccurrence: () => {},
+            escalation: {
+              ladder: DEFAULT_LADDER,
+              speak: async () => ({ spoken: true }),
+              notify: async () => ({ delivered: true }),
+            },
+          }),
+        }),
+      ],
+    });
+
+    assert.deepEqual([...wiring.occurrenceHandlers.keys()], ["hydration", "medication"]);
+    assert.deepEqual([...wiring.escalationHandlers.keys()], ["medication"]);
+  });
+
+  it("hands every capability the escalation store composition chose", () => {
+    const escalations = new MemoryEscalationStore();
+    const given: CapabilityContext[] = [];
+
+    registerCapabilities(testConfig(), undefined, {
+      capabilities: [
+        fakeCapability("medication", {
+          register: (_registry, ctx): CapabilityReport => {
+            given.push(ctx);
+            return { name: "medication", registered: true, tools: [], detail: {} };
+          },
+        }),
+      ],
+      escalations,
+    });
+
+    assert.equal(given[0]?.escalations, escalations);
+  });
+
+  it("gives each call its own stores rather than sharing module-level ones", () => {
+    // backend/test/server.test.ts starts two servers in one process. Two
+    // deployments finding each other's reminders is not a subtle bug.
+    const a: CapabilityContext[] = [];
+    const record = (into: CapabilityContext[]) =>
+      fakeCapability("medication", {
+        register: (_registry, ctx): CapabilityReport => {
+          into.push(ctx);
+          return { name: "medication", registered: true, tools: [], detail: {} };
+        },
+      });
+
+    registerCapabilities(testConfig(), undefined, { capabilities: [record(a)] });
+    registerCapabilities(testConfig(), undefined, { capabilities: [record(a)] });
+
+    assert.notEqual(a[0]!.schedules, a[1]!.schedules);
+    assert.notEqual(a[0]!.escalations, a[1]!.escalations);
   });
 
   it("registers no occurrence handlers at all today", () => {
@@ -399,6 +485,8 @@ describe("capabilities and the scheduler", () => {
     // which is why composition starts no ticker. When medication reminders land
     // this test fails, and that failure is the reminder to check the boot log
     // says what it should.
-    assert.equal(registerCapabilities(testConfig()).handlers.size, 0);
+    const wiring = registerCapabilities(testConfig());
+    assert.equal(wiring.occurrenceHandlers.size, 0);
+    assert.equal(wiring.escalationHandlers.size, 0);
   });
 });

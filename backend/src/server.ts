@@ -35,6 +35,7 @@ import { Session } from "@sp-i/ai/orchestrator/session.ts";
 import { SessionRegistry } from "@sp-i/ai/orchestrator/session-registry.ts";
 import { HoldingAudio } from "@sp-i/ai/audio/holding-audio.ts";
 import { buildMemory } from "./composition/memory.ts";
+import { buildEscalationStore, startEscalationRunner } from "./composition/escalation.ts";
 import { buildScheduleStore, startScheduler } from "./composition/scheduler.ts";
 import { CAPABILITIES, externalSummary, registerCapabilities } from "./composition/tools.ts";
 
@@ -84,15 +85,21 @@ export function start(): ServerHandle {
 
   const { store, memStream, longTerm, worker } = buildMemory(cfg, log);
 
-  // Before the capabilities, because a capability writes into it. Nothing is
-  // opened or started here — see composition/scheduler.ts.
+  // Before the capabilities, because a capability writes reminders into one and
+  // closes ladders in the other from inside a tool call. Nothing is opened or
+  // started here — see composition/scheduler.ts and composition/escalation.ts.
   const schedules = buildScheduleStore(cfg);
+  const escalations = buildEscalationStore(cfg);
 
   // One loop over ai/src/capabilities. This used to be three calls into three
   // differently-shaped composition modules, and the log below recomputed what
   // they had done from six config flags — so it could disagree with what was
   // actually registered. Each capability reports its own line now.
-  const capabilities = registerCapabilities(cfg, log, CAPABILITIES, schedules);
+  const capabilities = registerCapabilities(cfg, log, {
+    capabilities: CAPABILITIES,
+    schedules,
+    escalations,
+  });
   const { tools } = capabilities;
 
   log("info", "tools registered", {
@@ -102,9 +109,11 @@ export function start(): ServerHandle {
     note: "sarvam-105b tool-calling verified 2026-08-29 — npm run verify:tools",
   });
 
-  // After the capabilities, because it dispatches to them. Silent and inert
-  // until one of them registers an occurrence handler.
-  const scheduler = startScheduler(cfg, log, schedules, capabilities.handlers);
+  // After the capabilities, because both dispatch to them. Silent and inert
+  // until one of them registers a handler — the two are independent, and a
+  // capability may reasonably want reminders without escalation.
+  const scheduler = startScheduler(cfg, log, schedules, capabilities.occurrenceHandlers);
+  const escalation = startEscalationRunner(cfg, log, escalations, capabilities.escalationHandlers);
 
   // The apology for a Bulbul outage, rendered ahead of time — the one message
   // that cannot be synthesised, because synthesis is what broke.
@@ -220,6 +229,7 @@ export function start(): ServerHandle {
       // starts two servers would otherwise leave the first one's interval live.
       capabilities.dispose();
       void scheduler.stop().catch(() => {});
+      void escalation.stop().catch(() => {});
       // One last drain attempt. A buffered backlog dies with the process — that
       // is what "bounded in-process buffer" means, and it is stated plainly in
       // docs/adr/0008-degradation-policy.md rather than discovered.

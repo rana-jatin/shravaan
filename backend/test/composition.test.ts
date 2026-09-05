@@ -18,8 +18,13 @@ import type { CapabilityReport } from "@sp-i/ai/capabilities/types.ts";
 import { MemoryScheduleStore } from "@sp-i/ai/scheduler/memory-schedule-store.ts";
 import { RedisScheduleStore } from "@sp-i/ai/scheduler/redis-schedule-store.ts";
 import type { OccurrenceHandler } from "@sp-i/ai/scheduler/ticker.ts";
+import { MemoryEscalationStore } from "@sp-i/ai/escalation/memory-escalation-store.ts";
+import { RedisEscalationStore } from "@sp-i/ai/escalation/redis-escalation-store.ts";
+import type { EscalationHandler } from "@sp-i/ai/escalation/runner.ts";
+import { DEFAULT_LADDER } from "@sp-i/ai/escalation/types.ts";
 import { externalSummary } from "../src/composition/tools.ts";
 import { buildScheduleStore, startScheduler } from "../src/composition/scheduler.ts";
+import { buildEscalationStore, startEscalationRunner } from "../src/composition/escalation.ts";
 
 const report = (name: string, detail: Record<string, unknown>): CapabilityReport => ({
   name,
@@ -168,5 +173,70 @@ describe("startScheduler", () => {
     assert.equal(lines[0]?.extra?.["warning"], undefined);
     assert.equal(lines[0]?.extra?.["store"], "redis");
     await durable.stop();
+  });
+});
+
+const ESCALATES: EscalationHandler = {
+  ladder: DEFAULT_LADDER,
+  speak: async () => ({ spoken: true }),
+  notify: async () => ({ delivered: true }),
+};
+
+describe("buildEscalationStore", () => {
+  it("keeps unanswered reminders in process when there is no REDIS_URL", () => {
+    assert.ok(buildEscalationStore(config(null)) instanceof MemoryEscalationStore);
+  });
+
+  it("uses Redis when there is one, without connecting to find out", async () => {
+    const store = buildEscalationStore(config("redis://127.0.0.1:6399/0"));
+    assert.ok(store instanceof RedisEscalationStore);
+    await store.close?.();
+  });
+});
+
+describe("startEscalationRunner", () => {
+  it("starts nothing, and says nothing, when no capability escalates", async () => {
+    lines.length = 0;
+    const handle = startEscalationRunner(config(null), log, new MemoryEscalationStore(), new Map());
+
+    assert.equal(handle.runner, null);
+    assert.deepEqual(lines, []);
+    await handle.stop();
+  });
+
+  it("starts a sweep as soon as something would climb the ladder", async () => {
+    lines.length = 0;
+    const handle = startEscalationRunner(
+      config("redis://127.0.0.1:6399/0"),
+      log,
+      new MemoryEscalationStore(),
+      new Map([["medication", ESCALATES]]),
+    );
+
+    assert.equal(handle.runner?.running, true);
+    assert.deepEqual(lines[0]?.extra?.["capabilities"], ["medication"]);
+    assert.equal(lines[0]?.extra?.["store"], "redis");
+
+    await handle.stop();
+    assert.equal(handle.runner?.running, false);
+  });
+
+  it("calls losing unanswered reminders an error, not a warning", async () => {
+    // Louder than the working-memory warning on purpose, and a different
+    // sentence: a lost turn window is a shallow companion for a few minutes; a
+    // lost ladder is a family call that never happens and is never reported.
+    lines.length = 0;
+    const handle = startEscalationRunner(
+      config(null),
+      log,
+      new MemoryEscalationStore(),
+      new Map([["medication", ESCALATES]]),
+    );
+
+    const warning = lines.find((l) => l.msg.includes("do not survive a restart"))!;
+    assert.equal(warning.level, "error");
+    assert.match(String(warning.extra?.["effect"]), /never confirmed|missed/);
+
+    await handle.stop();
   });
 });

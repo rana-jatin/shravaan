@@ -34,6 +34,8 @@ import type { ToolRegistry } from "../tools/registry.ts";
 import type { EmergencyAlerter } from "../tools/emergency.ts";
 import type { ScheduleStore } from "../scheduler/types.ts";
 import type { OccurrenceHandler } from "../scheduler/ticker.ts";
+import type { EscalationStore } from "../escalation/types.ts";
+import type { EscalationHandler } from "../escalation/runner.ts";
 
 /** Structurally the logger `backend/server.ts` builds and hands down. */
 export type CapabilityLog = (level: string, msg: string, extra?: Record<string, unknown>) => void;
@@ -49,6 +51,14 @@ export type CapabilityContext = {
    * medication is written the same way either side of that choice.
    */
   schedules: ScheduleStore;
+  /**
+   * Where a reminder waits while nobody has answered it.
+   *
+   * A capability needs this to CLOSE a ladder — `acknowledgeOpen` takes the
+   * store, not the runner, precisely so a tool can say "they confirmed it"
+   * without the capability and the runner holding each other.
+   */
+  escalations: EscalationStore;
 };
 
 /**
@@ -105,6 +115,17 @@ export type CapabilityReport = {
    * the same process.
    */
   onOccurrence?: OccurrenceHandler;
+
+  /**
+   * How this capability speaks and escalates a reminder nobody answered.
+   *
+   * SEPARATE FROM `onOccurrence` because they answer different questions.
+   * `onOccurrence` is "a schedule came due, do something about it" and runs
+   * once. This is "it is still unanswered, what now" and runs on every sweep
+   * until the ladder ends. A capability may want either without the other: a
+   * hydration prompt is worth saying and not worth escalating.
+   */
+  escalation?: EscalationHandler;
 };
 
 /**
