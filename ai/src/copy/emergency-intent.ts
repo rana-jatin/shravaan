@@ -39,6 +39,8 @@
  */
 
 import type { LanguageCode } from "@sp-i/shared/domain/types.ts";
+import type { CopySet } from "../i18n/types.ts";
+import { t } from "../i18n/resolve.ts";
 
 /** Languages whose phrases still need a native speaker. */
 export const PENDING_REVIEW: LanguageCode[] = [
@@ -348,4 +350,52 @@ export const EMERGENCY_FAILED: Record<LanguageCode, string> = {
 /** Boot-time list of what a native speaker still has to sign off. */
 export function pendingEmergencyReview(): LanguageCode[] {
   return [...PENDING_REVIEW];
+}
+
+/**
+ * What the companion says while the alert goes out.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THIS RESOLVER EXISTS BECAUSE THE ONE IT REPLACES SKIPPED THE LADDER.
+ *
+ * `session.ts` read `EMERGENCY_ACK[language] ?? EMERGENCY_ACK["en-IN"]` inline —
+ * straight to English, past Hindi. Every other resolver in the codebase goes
+ * language -> hi-IN -> en-IN, and `languages.json` puts Hindi there because it
+ * has the widest comprehension across the excluded set. Of all the sentences to
+ * fall back to the least-understood language on, this is the one being said to
+ * someone who has just asked for help.
+ *
+ * It has never fired: all eleven languages are present below. It was one
+ * missing translation away from mattering, and it costs nothing to be right.
+ *
+ * The interpolation moved too. `.replace("{names}", …)` substitutes the FIRST
+ * occurrence only, so a translation using the placeholder twice would have read
+ * the second one out as literal braces. See `interpolate` in i18n/resolve.ts.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export function resolveEmergencyAck(language: LanguageCode, names: string): string {
+  return t(ACK_CATALOGUE, "ack", language, { vars: { names } });
+}
+
+/** What it says when the alert did NOT go out. Same ladder, no placeholders. */
+export function resolveEmergencyFailed(language: LanguageCode): string {
+  return t(FAILED_CATALOGUE, "failed", language);
+}
+
+/**
+ * These two tables predate the CopySet shape and are plain strings, one per
+ * language. Wrapped rather than rewritten: converting them would touch
+ * twenty-two translated sentences to change nothing a user hears, and these are
+ * the two sentences in the product least worth a careless diff.
+ */
+const ACK_CATALOGUE = { ack: asCatalogueEntry(EMERGENCY_ACK) };
+const FAILED_CATALOGUE = { failed: asCatalogueEntry(EMERGENCY_FAILED) };
+
+function asCatalogueEntry(table: Record<LanguageCode, string>) {
+  const out: Record<LanguageCode, CopySet> = {};
+  for (const [language, text] of Object.entries(table)) {
+    // Review status lives in PENDING_REVIEW for these, not per string.
+    out[language] = { variants: [text], needsNativeReview: PENDING_REVIEW.includes(language) };
+  }
+  return out;
 }

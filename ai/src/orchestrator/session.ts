@@ -35,6 +35,7 @@ import { DEGRADATIONS, DegradationLedger, type DegradationKey } from "../domain/
 import { standbyFor } from "../domain/asr-failover.ts";
 import { moodTrend } from "../domain/care-signals.ts";
 import { ASR_STABLE_MS, reopenDecision } from "../domain/asr-reopen.ts";
+import { GameController } from "../domain/games/controller.ts";
 import type {
   FactKind,
   GateDecision,
@@ -61,7 +62,11 @@ import {
 import type { TtsClient } from "../providers/tts-client.ts";
 import { NullSessionStore, type SessionStore } from "../store/session-store.ts";
 import { matchMediaIntent } from "../copy/stop-intent.ts";
-import { EMERGENCY_ACK, EMERGENCY_FAILED, matchEmergency } from "../copy/emergency-intent.ts";
+import {
+  matchEmergency,
+  resolveEmergencyAck,
+  resolveEmergencyFailed,
+} from "../copy/emergency-intent.ts";
 import { ToolExecutor } from "../tools/executor.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
 import type { SessionToolHost, ToolResult } from "../tools/types.ts";
@@ -118,6 +123,13 @@ export class Session {
    * but that file is shared and this lands first as session-local state.
    */
   readonly #media: MediaController;
+  /**
+   * The game round, if one is being played. Session-scoped and nothing more —
+   * a score is not written anywhere and does not survive the session, which is
+   * deliberate: see the note in src/tools/games.ts on what this must never
+   * become.
+   */
+  readonly #games = new GameController();
   /** Live TTS pace, adjustable mid-conversation by the `set_speaking_pace` tool. */
   #pace: number;
   /**
@@ -365,6 +377,8 @@ export class Session {
       playMedia: (req) => this.#media.start(req),
 
       stopMedia: (reason: string) => this.#media.stop(reason),
+
+      games: () => this.#games,
     };
   }
 
@@ -1486,8 +1500,7 @@ export class Session {
     if (this.#media.playing) this.#media.stop("emergency");
 
     const language = this.#state.language;
-    const ack = EMERGENCY_ACK[language] ?? EMERGENCY_ACK["en-IN"]!;
-    this.#speak(ack.replace("{names}", alerter.names));
+    this.#speak(resolveEmergencyAck(language, alerter.names));
 
     const result = await alerter.raise({
       uid: this.#d.uid,
@@ -1506,7 +1519,7 @@ export class Session {
     });
 
     if (!result.sent) {
-      this.#speak(EMERGENCY_FAILED[language] ?? EMERGENCY_FAILED["en-IN"]!);
+      this.#speak(resolveEmergencyFailed(language));
     }
   }
 
@@ -1574,6 +1587,17 @@ export class Session {
     // leave the device playing to an empty room with nothing left to stop it —
     // the socket is about to go, and with it the only route to stop_media.
     this.#media.stop(`session_${reason}`);
+    // A round abandoned mid-question. Nothing to tear down — it holds no
+    // handles — but it is the one thing about this session an operator cannot
+    // reconstruct from the turn log, since the score lives nowhere else.
+    const abandoned = this.#games.end();
+    if (abandoned.ended) {
+      this.#log("info", "game abandoned at session close", {
+        kind: abandoned.kind,
+        correct: abandoned.correct,
+        asked: abandoned.asked,
+      });
+    }
     this.#turnAbort?.abort();
     if (this.#asrReopenTimer) clearTimeout(this.#asrReopenTimer);
     this.#asrReopenTimer = null;

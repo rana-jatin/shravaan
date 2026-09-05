@@ -23,6 +23,7 @@
  */
 
 import type { LanguageCode, MessageKey } from "@sp-i/shared/domain/types.ts";
+import { LADDER } from "../i18n/resolve.ts";
 
 export type CopyEntry = {
   text: string;
@@ -208,7 +209,13 @@ export const COPY: CopyTable = {
  */
 export function resolveCopy(key: MessageKey, language: LanguageCode): CopyEntry {
   const table = COPY[key];
-  return table[language] ?? table["hi-IN"] ?? table["en-IN"]!;
+  const direct = table[language];
+  if (direct) return direct;
+  for (const rung of LADDER) {
+    const found = table[rung];
+    if (found) return found;
+  }
+  return Object.values(table)[0]!;
 }
 
 /** Languages whose copy is still placeholder text. Surfaced at boot. */

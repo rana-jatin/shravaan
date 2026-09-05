@@ -14,11 +14,10 @@
 
 import type { LanguageCode } from "@sp-i/shared/domain/types.ts";
 import type { FallbackKey, ProgressKey } from "../tools/types.ts";
+import { draft, ready, type CopySet } from "../i18n/types.ts";
+import { reviewPending, t } from "../i18n/resolve.ts";
 
-export type CopySet = { variants: string[]; needsNativeReview: boolean };
-
-const ready = (...variants: string[]): CopySet => ({ variants, needsNativeReview: false });
-const draft = (...variants: string[]): CopySet => ({ variants, needsNativeReview: true });
+export type { CopySet };
 
 /** Spoken while a slow tool runs. Short by design — it buys time, not attention. */
 export const FILLERS: Record<LanguageCode, CopySet> = {
@@ -185,16 +184,19 @@ export const PROGRESS: Record<ProgressKey, Record<LanguageCode, CopySet>> = {
   },
 };
 
+/**
+ * A single-key catalogue, so the generic filler resolves through the same
+ * ladder as everything else rather than spelling one out again.
+ */
+const FILLER_CATALOGUE = { filler: FILLERS };
+
 /** Rotates through variants so a waiting companion does not sound like a loop. */
 export function resolveFiller(language: LanguageCode, turnIndex: number): string {
-  const set = FILLERS[language] ?? FILLERS["hi-IN"] ?? FILLERS["en-IN"]!;
-  return set.variants[turnIndex % set.variants.length]!;
+  return t(FILLER_CATALOGUE, "filler", language, { rotate: turnIndex });
 }
 
 export function resolveFallback(key: FallbackKey, language: LanguageCode): string {
-  const table = FALLBACKS[key];
-  const set = table[language] ?? table["hi-IN"] ?? table["en-IN"]!;
-  return set.variants[0]!;
+  return t(FALLBACKS, key, language);
 }
 
 /**
@@ -203,23 +205,14 @@ export function resolveFallback(key: FallbackKey, language: LanguageCode): strin
  * sentence both times.
  */
 export function resolveProgress(key: ProgressKey, language: LanguageCode, turnIndex = 0): string {
-  const table = PROGRESS[key];
-  const set = table[language] ?? table["hi-IN"] ?? table["en-IN"]!;
-  return set.variants[turnIndex % set.variants.length]!;
+  return t(PROGRESS, key, language, { rotate: turnIndex });
 }
 
 /** Languages whose filler, fallback or progress copy is still placeholder text. */
 export function pendingCopyReview(): Array<{ scope: string; language: LanguageCode }> {
-  const out: Array<{ scope: string; language: LanguageCode }> = [];
-  for (const [lang, set] of Object.entries(FILLERS)) {
-    if (set.needsNativeReview) out.push({ scope: "filler", language: lang });
-  }
-  for (const table of [FALLBACKS, PROGRESS]) {
-    for (const [key, byLanguage] of Object.entries(table)) {
-      for (const [lang, set] of Object.entries(byLanguage)) {
-        if (set.needsNativeReview) out.push({ scope: key, language: lang });
-      }
-    }
-  }
-  return out;
+  return [
+    ...reviewPending("filler", FILLER_CATALOGUE),
+    ...reviewPending("fallback", FALLBACKS, true),
+    ...reviewPending("progress", PROGRESS, true),
+  ];
 }

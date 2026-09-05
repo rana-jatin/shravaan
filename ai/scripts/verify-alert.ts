@@ -26,7 +26,7 @@ import { loadConfig } from "@sp-i/shared/config/env.ts";
 import { createSmtpSender, type MailSender } from "../src/providers/smtp.ts";
 import { createHttpMailSender, explainMailApiError } from "../src/providers/mail-api.ts";
 import { formatNames, parseContacts } from "../src/tools/emergency.ts";
-import { EMERGENCY_ACK, pendingEmergencyReview } from "../src/copy/emergency-intent.ts";
+import { pendingEmergencyReview, resolveEmergencyAck } from "../src/copy/emergency-intent.ts";
 
 const cfg = loadConfig();
 const { contacts, invalid } = parseContacts(cfg.emergency.contacts);
@@ -99,7 +99,7 @@ console.log(`
   transport  ${transport}
   from       ${sender}
   to         ${contacts.map((c) => `${c.name} <${c.email}>`).join("\n             ")}
-  spoken as  "${(EMERGENCY_ACK["en-IN"] ?? "").replace("{names}", formatNames(contacts))}"
+  spoken as  "${resolveEmergencyAck("en-IN", formatNames(contacts))}"
 `);
 
 const started = Date.now();
