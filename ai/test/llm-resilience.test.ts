@@ -21,7 +21,7 @@ import {
   type StreamChunk,
 } from "../src/providers/sarvam-llm.ts";
 import { ThinkFilter } from "../src/domain/think-filter.ts";
-import { LLM_RETRY, withBackoff } from "../src/domain/backoff.ts";
+import { LLM_RETRY, withBackoff } from "@sp-i/shared/domain/backoff.ts";
 import { testConfig } from "./helpers.ts";
 
 /**

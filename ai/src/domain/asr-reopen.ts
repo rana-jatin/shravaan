@@ -21,7 +21,7 @@
  * window was doing its job; a rejected one dies in well under a second.
  */
 
-import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "./backoff.ts";
+import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "@sp-i/shared/domain/backoff.ts";
 
 /**
  * How long an ASR socket must survive to count as having worked.

@@ -30,7 +30,7 @@ import { EchoGuard } from "../domain/echo-guard.ts";
 import { isSpeakable, normalizeLanguage } from "../domain/languages.ts";
 import { transition } from "../domain/turn-state.ts";
 import { TURN_WINDOW } from "@sp-i/shared/domain/redis-keys.ts";
-import { LLM_RETRY, withBackoff } from "../domain/backoff.ts";
+import { LLM_RETRY, withBackoff } from "@sp-i/shared/domain/backoff.ts";
 import { DEGRADATIONS, DegradationLedger, type DegradationKey } from "../domain/degradation.ts";
 import { standbyFor } from "../domain/asr-failover.ts";
 import { moodTrend } from "../domain/care-signals.ts";
@@ -1377,7 +1377,7 @@ export class Session {
    * Sarvam-105B's limit is 40 req/min on Starter and it is per ACCOUNT, not per
    * session ([ADR 0003](../../docs/adr/0003-llm.md)). When it trips it trips for
    * every live conversation at once, which is why the backoff is jittered — see
-   * src/domain/backoff.ts.
+   * shared/src/domain/backoff.ts.
    */
   async *#llmStream(
     messages: ChatMessage[],

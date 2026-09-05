@@ -83,7 +83,7 @@ export type SessionDeps = {
    * `elapsedMs + delayMs` crosses LLM_FILLER_AFTER_MS. Against real jitter that
    * is a coin toss, so "says one thing after 600 ms of silence" is not otherwise
    * assertable without both waiting and flaking. `withBackoff` already takes all
-   * three (src/domain/backoff.ts); this is only a way to reach them.
+   * three (shared/src/domain/backoff.ts); this is only a way to reach them.
    */
   clock?:
     | {

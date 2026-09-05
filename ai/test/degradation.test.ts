@@ -24,7 +24,7 @@ import {
   rawDelayFor,
   retryPlan,
   withBackoff,
-} from "../src/domain/backoff.ts";
+} from "@sp-i/shared/domain/backoff.ts";
 import { CircuitBreaker, guard } from "../src/domain/circuit-breaker.ts";
 import {
   DEGRADATIONS,

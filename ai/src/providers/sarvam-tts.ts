@@ -40,7 +40,7 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import type { Config } from "@sp-i/shared/config/env.ts";
-import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "../domain/backoff.ts";
+import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "@sp-i/shared/domain/backoff.ts";
 import type { TtsClient, TtsEvents, TtsOptions } from "./tts-client.ts";
 
 // The surface the orchestrator holds lives on the interface now

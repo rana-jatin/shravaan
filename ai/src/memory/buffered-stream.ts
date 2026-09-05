@@ -34,7 +34,7 @@
 
 import type { MemWriteEvent, MemWriteKind } from "@sp-i/shared/domain/types.ts";
 import type { MemWriteStream, StreamEntry } from "./stream.ts";
-import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "../domain/backoff.ts";
+import { SOCKET_RECONNECT, delayFor, type BackoffPolicy } from "@sp-i/shared/domain/backoff.ts";
 
 /** Higher survives longer. See the header for why corrections top the list. */
 const PRIORITY: Record<MemWriteKind, number> = {

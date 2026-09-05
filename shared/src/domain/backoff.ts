@@ -1,6 +1,18 @@
 /**
  * Retry with backoff — slice 8.
  *
+ * IT LIVES IN `shared/` BECAUSE THREE PACKAGES NOW NEED IT. It began beside the
+ * turn loop, which was where the only caller was; it is also what bounds a TTS
+ * socket reconnect, and now what retries an idempotent GET inside
+ * `shared/providers/http.ts` — and `shared` cannot import from `ai`, so a copy
+ * there would have been a second implementation of the one thing in this file
+ * that must not be got twice (see jitter, below).
+ *
+ * The POLICIES below are turn-loop-shaped and stay with the mechanism rather
+ * than being split across packages: they are data, and a reader comparing
+ * "how patient is the LLM path" with "how patient is a socket" should not have
+ * to open two files to do it.
+ *
  * TWO PROPERTIES MATTER HERE AND BOTH ARE EASY TO GET WRONG.
  *
  * 1. JITTER IS NOT DECORATION. Sarvam-105B's rate limit is per account, not per
