@@ -36,6 +36,7 @@ import type { ScheduleStore } from "../scheduler/types.ts";
 import type { OccurrenceHandler } from "../scheduler/ticker.ts";
 import type { EscalationStore } from "../escalation/types.ts";
 import type { EscalationHandler } from "../escalation/runner.ts";
+import type { SessionRegistry } from "../orchestrator/session-registry.ts";
 
 /** Structurally the logger `backend/server.ts` builds and hands down. */
 export type CapabilityLog = (level: string, msg: string, extra?: Record<string, unknown>) => void;
@@ -59,6 +60,27 @@ export type CapabilityContext = {
    * without the capability and the runner holding each other.
    */
   escalations: EscalationStore;
+  /**
+   * Live conversations, for a capability that needs to say something nobody
+   * asked for.
+   *
+   * THE NARROWEST THING THAT WORKS is what comes back from it: a `LiveSession`
+   * can be spoken one prepared sentence and nothing else. A capability holding
+   * the registry cannot run a turn, reach the model, or read a transcript — see
+   * orchestrator/session-registry.ts for why that limit is the point.
+   */
+  sessions: SessionRegistry;
+  /**
+   * The clock, because a capability that acts between turns has one.
+   *
+   * Every module underneath this takes its instants as arguments — the
+   * scheduler domain, the ladder, both loops — and a capability reading
+   * `Date.now()` inline is the one place that discipline can leak back out. It
+   * did: the first end-to-end test of medication reminders escalated to the
+   * family without ever speaking, because the record's clock was wall time and
+   * everything around it was the test's.
+   */
+  now: () => number;
 };
 
 /**

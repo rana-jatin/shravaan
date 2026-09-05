@@ -16,9 +16,7 @@
  */
 
 import { createRaiseAlarm, EmergencyAlerter, parseContacts } from "../tools/emergency.ts";
-import { createSmtpSender, type MailSender } from "../providers/smtp.ts";
-import { emailChannel } from "../notify/email.ts";
-import { createHttpMailSender } from "../providers/mail-api.ts";
+import { buildTransport, transportGaps } from "../notify/transport.ts";
 import { pendingEmergencyReview } from "../copy/emergency-intent.ts";
 import type { Capability, CapabilityReport } from "./types.ts";
 
@@ -46,45 +44,16 @@ export const emergencyCapability: Capability = {
       });
     }
 
-    // One seam, two transports. See providers/mail-api.ts for why the HTTP one
-    // is preferred on this particular path.
-    let mailSender: MailSender | null = null;
-    let transportLabel = "";
-    if (cfg.mail.transport === "smtp") {
-      if (cfg.mail.smtp.host && cfg.mail.smtp.from) {
-        mailSender = createSmtpSender({
-          host: cfg.mail.smtp.host,
-          port: cfg.mail.smtp.port,
-          security: cfg.mail.smtp.security,
-          user: cfg.mail.smtp.user,
-          pass: cfg.mail.smtp.pass,
-          from: cfg.mail.smtp.from,
-        });
-        transportLabel = `smtp ${cfg.mail.smtp.host}:${cfg.mail.smtp.port} (${cfg.mail.smtp.security})`;
-      }
-    } else if (cfg.mail.apiKey && cfg.mail.from) {
-      mailSender = createHttpMailSender({
-        provider: cfg.mail.transport,
-        apiKey: cfg.mail.apiKey,
-        from: cfg.mail.from,
-      });
-      transportLabel = `${cfg.mail.transport} web api, from ${cfg.mail.from}`;
-    }
+    // Shared with medication escalation, which reaches the same family through
+    // the same relay — see notify/transport.ts.
+    const transport = buildTransport(cfg);
 
-    if (contacts.length === 0 || !mailSender) {
+    if (contacts.length === 0 || !transport) {
       // Refused rather than half-enabled. See the file header.
       log("error", "EMERGENCY ALERTING IS OFF — configured only halfway", {
         contacts: contacts.length,
         transport: cfg.mail.transport,
-        ...(cfg.mail.transport === "smtp"
-          ? {
-              smtp_host: cfg.mail.smtp.host ? "set" : "MISSING",
-              smtp_from: cfg.mail.smtp.from ? "set" : "MISSING",
-            }
-          : {
-              mail_api_key: cfg.mail.apiKey ? "set" : "MISSING",
-              mail_from: cfg.mail.from ? "set" : "MISSING",
-            }),
+        ...transportGaps(cfg),
         effect: "a call for help will be treated as an ordinary turn",
       });
       return { name: "emergency", registered: false, tools: [], detail: { emergency: false } };
@@ -92,8 +61,8 @@ export const emergencyCapability: Capability = {
 
     const alerter = new EmergencyAlerter({
       // One channel today. SMS, a call or WhatsApp arrive as more entries
-      // here, not as edits to the alarm path. See notify/types.ts.
-      channels: [emailChannel(mailSender)],
+      // there, not as edits to the alarm path. See notify/transport.ts.
+      channels: transport.channels,
       contacts,
       cooldownMs: cfg.emergency.cooldownMs,
       log,
@@ -108,7 +77,7 @@ export const emergencyCapability: Capability = {
     // does not register, and nobody finds out until it matters.
     log("warn", "emergency alerting ARMED", {
       contacts: contacts.map((c) => `${c.name} <${c.email}>`),
-      transport: transportLabel,
+      transport: transport.label,
       unreviewed_languages: pendingEmergencyReview(),
       note: "en-IN and hi-IN phrases reviewed; the rest need a native speaker",
     });

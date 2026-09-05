@@ -20,6 +20,7 @@ import type { OccurrenceHandler } from "../scheduler/ticker.ts";
 import { MemoryEscalationStore } from "../escalation/memory-escalation-store.ts";
 import type { EscalationStore } from "../escalation/types.ts";
 import type { EscalationHandler } from "../escalation/runner.ts";
+import { SessionRegistry } from "../orchestrator/session-registry.ts";
 import { CAPABILITIES } from "./catalogue.ts";
 import type { Capability, CapabilityLog, CapabilityReport, SessionContributions } from "./types.ts";
 
@@ -66,6 +67,10 @@ export type RegisterOptions = {
   schedules?: ScheduleStore;
   /** Where unanswered reminders live mid-ladder. Same default. */
   escalations?: EscalationStore;
+  /** Live conversations. Defaults to an empty registry nothing ever fills. */
+  sessions?: SessionRegistry;
+  /** The clock a capability acting between turns should read. */
+  now?: () => number;
 };
 
 export function registerCapabilities(
@@ -80,6 +85,10 @@ export function registerCapabilities(
   // find each other's reminders. Composition passes the real ones.
   const schedules = opts.schedules ?? new MemoryScheduleStore();
   const escalations = opts.escalations ?? new MemoryEscalationStore();
+  // An empty registry is the honest default: a capability asking it who is live
+  // gets "nobody", which is exactly true of a wiring with no server attached.
+  const sessions = opts.sessions ?? new SessionRegistry();
+  const now = opts.now ?? Date.now;
 
   const tools = new ToolRegistry();
   const contributions: SessionContributions = {};
@@ -106,7 +115,7 @@ export function registerCapabilities(
     try {
       const report = capability.register(
         tools,
-        { cfg, log, schedules, escalations },
+        { cfg, log, schedules, escalations, sessions, now },
         contributions,
       );
       reports.push(report);

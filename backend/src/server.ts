@@ -91,6 +91,11 @@ export function start(): ServerHandle {
   const schedules = buildScheduleStore(cfg);
   const escalations = buildEscalationStore(cfg);
 
+  // Who is live right now. Built here rather than beside the WebSocket server
+  // because a capability takes it at registration: a reminder has to be able to
+  // find the conversation it belongs in. Empty until a device says hello.
+  const sessions = new SessionRegistry();
+
   // One loop over ai/src/capabilities. This used to be three calls into three
   // differently-shaped composition modules, and the log below recomputed what
   // they had done from six config flags — so it could disagree with what was
@@ -99,6 +104,7 @@ export function start(): ServerHandle {
     capabilities: CAPABILITIES,
     schedules,
     escalations,
+    sessions,
   });
   const { tools } = capabilities;
 
@@ -136,11 +142,6 @@ export function start(): ServerHandle {
       ? "ENABLED: a failover sends audio to Deepgram, which publishes no India region"
       : "disabled by default; enabling relocates audio out of India (docs/05 Q14)",
   });
-
-  // Who is live right now. Nothing reads it yet — medication reminders are the
-  // first caller — but it has to be filled from the moment sessions exist, or
-  // the first reminder finds an empty room that was never empty.
-  const sessions = new SessionRegistry();
 
   const wss = new WebSocketServer({ port: cfg.port });
   log("info", "listening", {

@@ -472,6 +472,53 @@ export function loadConfig() {
       writeTarget: process.env["CALENDAR_WRITE_TARGET"]?.trim() || null,
     },
 
+    /**
+     * Medication reminders, and the ladder when one goes unanswered.
+     *
+     * OFF BY DEFAULT, like every capability that can act on its own. This one
+     * is the first thing in the product that SPEAKS WITHOUT BEING ASKED, and
+     * turning that on should be a decision somebody made rather than a default
+     * they inherited.
+     *
+     * ⚠ THE FAMILY IT ESCALATES TO IS `EMERGENCY_CONTACTS`. Reusing the list is
+     * the conservative reading — in elder care they are almost always the same
+     * people — but the two questions are not identical ("who do I call if they
+     * fall" is not "who wants to know they skipped a tablet"), and a deployment
+     * that needs them separate needs a second list rather than a workaround.
+     * Reminders still work with no contacts at all; only the escalation is off,
+     * and the server says so at boot.
+     *
+     * ⚠ REQUIRES REDIS TO BE WORTH ANYTHING. Without it the schedules and the
+     * unanswered reminders are in-process, so a restart forgets both — which
+     * for this capability means a dose nobody is reminded of and nobody is told
+     * about. The server logs that at ERROR rather than WARN.
+     */
+    medication: {
+      enabled: opt("MEDICATION_ENABLED", "false") === "true",
+      /**
+       * The ladder, in minutes. Judgement rather than measurement: ten minutes
+       * is roughly long enough to walk to the kitchen and back, and nagging
+       * sooner is how a person learns to ignore the device.
+       */
+      nudgeAfterMinutes: num("MEDICATION_NUDGE_MINUTES", 10),
+      escalateAfterMinutes: num("MEDICATION_ESCALATE_MINUTES", 20),
+      /**
+       * When to stop. Two hours late, "take your eight o'clock tablet" is
+       * advice nobody should act on, and a reminder that never stops is one
+       * that gets the device unplugged.
+       */
+      abandonAfterMinutes: num("MEDICATION_ABANDON_MINUTES", 120),
+      /**
+       * A cap on how many reminders one person may hold.
+       *
+       * Not a storage concern — it is a speech concern. Every reminder is
+       * something the device says out loud without being asked, and a model
+       * that misreads one sentence as five separate medications would turn a
+       * companion into an alarm clock that nobody can silence.
+       */
+      maxPerUser: num("MEDICATION_MAX_PER_USER", 12),
+    },
+
     /** raise_alarm. Inert unless contacts AND a relay are configured. */
     emergency: {
       /**

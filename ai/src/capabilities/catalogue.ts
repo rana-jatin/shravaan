@@ -14,6 +14,7 @@ import type { Capability } from "./types.ts";
 import { coreCapability } from "./core.ts";
 import { gamesCapability } from "./games.ts";
 import { wellbeingCapability } from "./wellbeing.ts";
+import { medicationCapability } from "./medication.ts";
 import { weatherCapability } from "./weather.ts";
 import { newsCapability } from "./news.ts";
 import { musicCapability } from "./music.ts";
@@ -24,6 +25,10 @@ export const CAPABILITIES: readonly Capability[] = [
   coreCapability,
   gamesCapability,
   wellbeingCapability,
+  // Before the external ones because it is closer to the core of what this
+  // product is for, and after wellbeing because it depends on nothing wellbeing
+  // does. It is also the first entry whose tools can act between turns.
+  medicationCapability,
   weatherCapability,
   newsCapability,
   musicCapability,
