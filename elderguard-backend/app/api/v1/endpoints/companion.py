@@ -42,6 +42,7 @@ from app.schemas.companion import (
     CompanionAlert,
     CompanionContext,
     ContextIdentity,
+    OwnedAlert,
     SelfReportedVital,
     VitalRead,
     VitalsAccepted,
@@ -162,6 +163,43 @@ async def recent_vitals(
         .limit(limit)
     )
     return list(rows)
+
+
+@router.get(
+    "/alerts",
+    response_model=list[OwnedAlert],
+    summary="Every open alert, with the person each belongs to",
+)
+async def all_open_alerts(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[OwnedAlert]:
+    """
+    THE FEED THE COMPANION ACTUALLY POLLS, and the per-uid one below is for
+    answering a question about one person.
+
+    The companion has no list of users — it learns a uid when a device says
+    hello — so a per-uid feed can only surface alerts for somebody already in a
+    conversation. The reading that raised the alert came off a band, which does
+    not need the companion device switched on, and the person nobody can reach
+    is exactly the one whose family should hear about it. So this is joined
+    through the device to its owner and returned whole.
+
+    Alerts on an unowned device are skipped rather than returned with a null
+    uid: there is nobody to ask and nobody to tell, and a row the caller cannot
+    act on is worse than one it never saw.
+    """
+    rows = await db.execute(
+        select(Alert, Device.owner_id)
+        .join(Device, Device.id == Alert.device_id)
+        .where(Alert.status == AlertStatus.OPEN, Device.owner_id.is_not(None))
+        .order_by(Alert.created_at)
+        .limit(limit)
+    )
+    return [
+        OwnedAlert(**{c.name: getattr(alert, c.name) for c in Alert.__table__.columns}, uid=owner_id)
+        for alert, owner_id in rows.all()
+    ]
 
 
 @router.get(

@@ -121,6 +121,21 @@ class CompanionAlert(BaseModel):
     created_at: datetime
 
 
+class OwnedAlert(CompanionAlert):
+    """
+    An alert with the person it belongs to attached.
+
+    THE COMPANION HAS NO LIST OF USERS. It learns a uid when a device says
+    hello, so a per-uid feed can only ever surface alerts for somebody already
+    in a conversation — and the reading that raised the alert came off a band,
+    which does not need the companion device to be switched on. Without this,
+    an out-of-range reading for somebody whose device is unplugged would sit in
+    the table unread, which is the case that most deserves a phone call.
+    """
+
+    uid: UUID
+
+
 class AlertAck(BaseModel):
     """
     What the companion learned by asking.

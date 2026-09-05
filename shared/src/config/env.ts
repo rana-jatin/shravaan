@@ -590,6 +590,34 @@ export function loadConfig() {
        * and the right answer to a service that is not responding is to say so.
        */
       timeoutMs: num("VITALS_TIMEOUT_MS", 4000),
+      /**
+       * How often to ask the safety service what it has raised.
+       *
+       * Thirty seconds because that is the sweep's interval too, so an alert
+       * is picked up and acted on within roughly one minute of the reading. It
+       * is a poll rather than a callback on purpose — see the header of
+       * ai/src/vitals/alert-watcher.ts — and shortening it buys latency this
+       * path does not need: an out-of-range reading is not an emergency, and
+       * an SOS does not come through here at all.
+       */
+      pollSeconds: num("VITALS_POLL_SECONDS", 30),
+      /**
+       * The ladder for an alert, and it is the FASTEST one in the product.
+       *
+       * A tablet has a window measured in hours and a check-in has a morning.
+       * A reading that fell outside its band, or a device reporting a fall, is
+       * a question that stops being worth asking within minutes — either the
+       * person answers and it is over, or nobody is answering and the useful
+       * thing is a phone call from somebody who can go round.
+       *
+       * ⚠ ESCALATES TO `EMERGENCY_CONTACTS`, with the same caveat medication
+       * and check-ins carry: it is the conservative reading and the two
+       * questions are not identical. Here it is closer to the same question
+       * than anywhere else in the product.
+       */
+      nudgeAfterMinutes: num("VITALS_NUDGE_MINUTES", 2),
+      escalateAfterMinutes: num("VITALS_ESCALATE_MINUTES", 3),
+      abandonAfterMinutes: num("VITALS_ABANDON_MINUTES", 30),
     },
 
     /** raise_alarm. Inert unless contacts AND a relay are configured. */

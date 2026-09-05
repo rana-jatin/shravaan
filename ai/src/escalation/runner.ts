@@ -71,6 +71,24 @@ export type EscalationHandler = {
    * nudged for it afterwards.
    */
   answered?(escalation: Escalation): Promise<boolean>;
+
+  /**
+   * The ladder is over. Write that back wherever it needs writing.
+   *
+   * OPTIONAL, AND ONLY FOR A REMINDER THAT MIRRORS SOMETHING OUTSIDE THIS
+   * PROCESS. Medication and check-ins own their own state, so the record being
+   * removed IS the ending; vitals alerts are rows in the safety service, and
+   * one left open there is one this build asks about again on the next poll.
+   *
+   * CALLED BEFORE THE RECORD IS REMOVED, which is the same "act, then record"
+   * rule the rest of this file follows. A crash in between costs a repeated
+   * question, not a lost ladder.
+   *
+   * A throw here is logged and the record is still removed. The alternative —
+   * keeping it — would leave a terminal record the sweep re-reads forever, and
+   * asking somebody once more is the better of the two failures.
+   */
+  settled?(escalation: Escalation): Promise<void>;
 };
 
 export type RunnerLog = (level: string, msg: string, extra?: Record<string, unknown>) => void;
@@ -214,7 +232,7 @@ export class EscalationRunner {
       const asked = await attempt(() => handler.answered!(escalation));
       if (asked.ok && asked.value) {
         const settled = reduce(escalation, { type: "acknowledged" }, at, handler.ladder);
-        await this.#forget(settled.escalation);
+        await this.#forget(settled.escalation, handler);
         summary.settled++;
         return;
       }
@@ -267,7 +285,7 @@ export class EscalationRunner {
     }
 
     if (step.action.kind === "settle") {
-      await this.#forget(step.escalation);
+      await this.#forget(step.escalation, handler);
       summary.settled++;
       return;
     }
@@ -299,7 +317,20 @@ export class EscalationRunner {
     }
   }
 
-  async #forget(escalation: Escalation): Promise<void> {
+  async #forget(escalation: Escalation, handler: EscalationHandler): Promise<void> {
+    // Before the removal, so a crash between them costs a repeated question
+    // rather than a ladder nobody finishes. See `settled` above.
+    if (handler.settled) {
+      const wrote = await attempt(() => handler.settled!(escalation));
+      if (!wrote.ok) {
+        this.#log("error", "could not record a settled reminder where it came from", {
+          id: escalation.id,
+          capability: escalation.capability,
+          err: wrote.err,
+        });
+      }
+    }
+
     this.#log(escalation.stage === "abandoned" ? "warn" : "info", "reminder settled", {
       id: escalation.id,
       capability: escalation.capability,

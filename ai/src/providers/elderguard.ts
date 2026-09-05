@@ -60,8 +60,22 @@ export interface VitalsSink {
   recent(uid: string, limit: number): Promise<StoredVital[]>;
 }
 
+/** An alert plus the person it belongs to. What the service-wide feed returns. */
+export type OwnedAlert = RemoteAlert & { uid: string };
+
 /** Alerts raised by readings this process never saw. */
 export interface AlertFeed {
+  /**
+   * Every open alert the service holds, whoever it belongs to.
+   *
+   * THE ONE THE WATCHER POLLS, and it is service-wide rather than per-user for
+   * a reason worth stating: this process has no list of users. It learns a uid
+   * when a device says hello, so a per-uid feed could only ever surface alerts
+   * for somebody already in a conversation — and the band that raised the alert
+   * does not need the companion device switched on. The person nobody can reach
+   * is exactly the one whose family should hear about it.
+   */
+  allOpen(): Promise<OwnedAlert[]>;
   open(uid: string): Promise<RemoteAlert[]>;
   settle(uid: string, alertId: string, status: "acknowledged" | "resolved"): Promise<void>;
 }
@@ -116,6 +130,11 @@ export class ElderguardClient implements VitalsSink, AlertFeed {
     // service has never heard of has no readings, which is what the tool says.
     if (res.status === 404) return [];
     return parse<StoredVital[]>(res, "safety service");
+  }
+
+  async allOpen(): Promise<OwnedAlert[]> {
+    const res = await this.#send("/companion/alerts");
+    return parse<OwnedAlert[]>(res, "safety service");
   }
 
   async open(uid: string): Promise<RemoteAlert[]> {

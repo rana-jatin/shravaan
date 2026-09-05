@@ -408,3 +408,54 @@ async def test_one_users_vitals_are_not_readable_through_another_uid(
     )
     assert response.status_code == 200
     assert response.json() == []
+
+
+# --------------------------------------------------------------------------
+# The feed the companion actually polls
+# --------------------------------------------------------------------------
+
+
+async def test_the_service_wide_feed_names_who_each_alert_belongs_to(
+    client: AsyncClient, elder: str, paired_device: dict[str, Any]
+) -> None:
+    """
+    THE CASE THE PER-UID FEED CANNOT COVER. The companion learns a uid when a
+    device says hello, so it can only ask about somebody already talking to
+    it — and the band that raised this alert does not need the companion device
+    switched on. The person nobody can reach is exactly the one whose family
+    should hear about it.
+    """
+    await client.post(
+        "/api/v1/telemetry/stream",
+        json={"points": [{"heart_rate_bpm": 195}]},
+        headers=paired_device["headers"],
+    )
+
+    response = await client.get("/api/v1/companion/alerts", headers=KEY)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["uid"] == elder
+    assert body[0]["alert_type"] == "anomaly"
+
+
+async def test_the_feed_needs_the_key_like_everything_else(client: AsyncClient) -> None:
+    assert (await client.get("/api/v1/companion/alerts")).status_code == 401
+
+
+async def test_a_settled_alert_leaves_the_feed(
+    client: AsyncClient, elder: str, paired_device: dict[str, Any]
+) -> None:
+    await client.post(
+        "/api/v1/telemetry/stream",
+        json={"points": [{"motion_state": "fall"}]},
+        headers=paired_device["headers"],
+    )
+    alert = (await client.get("/api/v1/companion/alerts", headers=KEY)).json()[0]
+
+    await client.post(
+        f"/api/v1/companion/alerts/{elder}/{alert['id']}/ack",
+        json={"status": "acknowledged"},
+        headers=KEY,
+    )
+    assert (await client.get("/api/v1/companion/alerts", headers=KEY)).json() == []
