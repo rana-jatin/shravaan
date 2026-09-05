@@ -1,3 +1,12 @@
+# Local development stack.
+#
+# CREDENTIALS COME FROM THE ENVIRONMENT, NOT FROM THIS FILE. It used to carry
+# `POSTGRES_PASSWORD: shravaan` as a literal, repeated inside DATABASE_URL — and
+# a compose file is the thing most likely to be copied onto a server as-is. The
+# `:?` substitutions below make `docker compose up` refuse to start until the
+# value is set, which is the same "fail at boot rather than run insecurely" rule
+# the application config follows. Set them in the root `.env`; see `.env.example`.
+
 services:
   voice-backend:
     build:
@@ -18,10 +27,16 @@ services:
   shravaan-api:
     build:
       context: ./elderguard-backend
-    env_file: ./elderguard-backend/.env
+    env_file:
+      # Optional: every value this service needs to run locally is set below,
+      # so `docker compose up` works on a fresh clone. Without this, compose
+      # refused to even parse the file until you had copied .env.example across.
+      - path: ./elderguard-backend/.env
+        required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://shravaan:shravaan@db:5432/shravaan
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shravaan}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-shravaan}
       REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       MQTT_ENABLED: "true"
       MQTT_BROKER_HOST: mqtt
       MQTT_BROKER_PORT: "1883"
@@ -36,7 +51,13 @@ services:
       mqtt:
         condition: service_started
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -44,13 +65,15 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: shravaan
-      POSTGRES_USER: shravaan
-      POSTGRES_PASSWORD: shravaan
+      POSTGRES_DB: ${POSTGRES_DB:-shravaan}
+      POSTGRES_USER: ${POSTGRES_USER:-shravaan}
+      # No default. A database that starts with a password published in this
+      # repository is one anybody who has read it can open.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shravaan -d shravaan"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shravaan} -d ${POSTGRES_DB:-shravaan}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -69,7 +92,13 @@ services:
   mqtt:
     image: eclipse-mosquitto:2
     ports:
-      - "1883:1883"
+      # LOOPBACK ONLY. The broker allows anonymous publishing (mosquitto.conf),
+      # and the SOS topic is `shravaan/devices/{uuid}/sos` — so anyone who can
+      # reach this port and knows a device id can raise a false alarm on a
+      # family, or bury a real one under noise. Bound to 127.0.0.1 so host
+      # tooling still works while nothing on the network can reach it.
+      # Broker authentication is tracked as follow-up work.
+      - "127.0.0.1:1883:1883"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
