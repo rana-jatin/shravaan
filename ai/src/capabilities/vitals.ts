@@ -53,7 +53,7 @@ export const vitalsCapability: Capability = {
 
   isConfigured: (cfg) => cfg.vitals.apiBase !== null && cfg.vitals.apiKey !== null,
 
-  register(registry, { cfg, log, escalations, sessions, now }): CapabilityReport {
+  register(registry, { cfg, log, escalations, sessions, now }, contributions): CapabilityReport {
     const apiBase = cfg.vitals.apiBase;
     const apiKey = cfg.vitals.apiKey;
     // `isConfigured` already said both are present; this is the narrowing, and
@@ -100,6 +100,19 @@ export const vitalsCapability: Capability = {
     const specs = [createLogVital(deps), createRecentVitals(deps)];
     for (const spec of specs) registry.register(spec);
     watcher.start();
+
+    // WHO THE PERSON IS, which has been a `// wire your backend here` comment in
+    // server.ts since the first commit. It is contributed by this capability
+    // rather than by one of its own because the seam is one service behind one
+    // credential, and a second capability existing only to fetch identity would
+    // mean a second copy of the same two variables. The naming is the tension:
+    // "vitals" supplies a session's identity because "vitals" is what the URL
+    // and the key are called.
+    //
+    // ⚠ It returns identity and entitlements and NOTHING MEDICAL. The service
+    // refuses to put a reading in that payload and has a test asserting the
+    // absence — see the note on `SessionContributions.fetchContext`.
+    contributions.fetchContext = (uid) => client.context(uid);
 
     const { contacts } = parseContacts(cfg.emergency.contacts);
     const transport = buildTransport(cfg);
@@ -209,6 +222,7 @@ export const vitalsCapability: Capability = {
       // is a thing people write, and boot logs get shipped.
       service: redactUrl(apiBase),
       stores: "nothing locally — the safety service owns every reading",
+      session_context: "identity and entitlements, never a reading",
       // Said at boot because it is the promise the design rests on, and an
       // operator reading this line is the person who would notice it breaking.
       never: "the device does not say whether a reading is high, low or normal",

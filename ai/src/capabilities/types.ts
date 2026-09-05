@@ -30,6 +30,7 @@
  */
 
 import type { Config } from "@sp-i/shared/config/env.ts";
+import type { JsonContext } from "@sp-i/shared/domain/types.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
 import type { EmergencyAlerter } from "../tools/emergency.ts";
 import type { ScheduleStore } from "../scheduler/types.ts";
@@ -86,15 +87,35 @@ export type CapabilityContext = {
 /**
  * What a capability gives every Session, beyond its tools.
  *
- * Typed and explicit rather than a bag of unknowns. Only emergency uses it
- * today: `Session` takes the alerter directly because the LOCAL phrase matcher
- * runs before any tool round — "help help" must not wait on the model.
+ * Typed and explicit rather than a bag of unknowns. Emergency supplies the
+ * alerter, because `Session` runs the LOCAL phrase matcher before any tool
+ * round — "help help" must not wait on the model. Vitals supplies
+ * `fetchContext`, because it is the capability that holds a client for the
+ * service that knows who anybody is.
  *
- * Medication and check-ins will contribute here too, when they need a way to
- * reach a live conversation. Adding a field is the whole cost of that.
+ * Medication and check-ins contribute nothing here: they reach a conversation
+ * through the session registry instead, which is narrower. Adding a field is
+ * the whole cost of a capability needing more.
  */
 export type SessionContributions = {
   alerter?: EmergencyAlerter;
+  /**
+   * Who the person is, fetched at the top of a session.
+   *
+   * `SessionDeps.fetchContext` carried a `// wire your backend here` comment
+   * from the first commit until something was actually on the other end of it.
+   * A capability supplies it for the same reason it supplies the alerter: the
+   * client, the URL and the credential all belong to whichever capability
+   * configured them, and composition's job is to hand it on rather than to
+   * build a second one.
+   *
+   * ⚠ WHAT COMES BACK IS READ STRAIGHT INTO THE MODEL'S PROMPT, so it is the
+   * one payload in this system the device may bring up unprompted. Identity
+   * and entitlements belong in it; a health record does not, however
+   * convenient the same client makes it. The service refuses to put one there
+   * and there is a test on that side asserting the absence.
+   */
+  fetchContext?: (uid: string) => Promise<JsonContext | null>;
 };
 
 /**

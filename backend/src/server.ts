@@ -184,11 +184,17 @@ export function start(): ServerHandle {
           tools,
           longTerm,
           holdingAudio,
-          // Absent when unconfigured, which leaves the alarm path inert rather
-          // than half-working. See the boot log above.
+          // The alerter and `fetchContext`, each absent when the capability
+          // that supplies it is unconfigured — which leaves the alarm path
+          // inert rather than half-working, and leaves a session with no JSON
+          // context rather than an unverified one. See the boot log above.
+          //
+          // `fetchContext` carried a `// wire your backend here` comment here
+          // from the first commit. The safety service is now on the other end
+          // of it: see ai/src/capabilities/vitals.ts. Without it, a session
+          // runs with no identity and entitlement-gated tools are withheld
+          // rather than offered unverified.
           ...capabilities.contributions,
-          // fetchContext: wire your backend here. Without it, entitlement-gated
-          // tools are withheld rather than offered unverified.
           uid: String(msg["uid"] ?? "anonymous"),
           // A device reconnecting with its previous sid resumes that thread,
           // provided the idle window has not lapsed.

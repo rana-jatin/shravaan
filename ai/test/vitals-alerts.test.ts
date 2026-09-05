@@ -412,3 +412,23 @@ describe("an alert, from the feed to the family", () => {
     w.wiring.dispose();
   });
 });
+
+describe("who the person is", () => {
+  it("supplies fetchContext only where the service is configured", () => {
+    // `SessionDeps.fetchContext` carried a `// wire your backend here` comment
+    // from the first commit. Unconfigured it stays absent, so a session runs
+    // with no identity rather than an unverified one.
+    const off = registerCapabilities(testConfig(), () => {}, {
+      capabilities: [vitalsCapability],
+    });
+    assert.equal(off.contributions.fetchContext, undefined);
+
+    const on = registerCapabilities(
+      testConfig({ vitals: { apiBase: "http://safety.local/api/v1", apiKey: "k" } }),
+      () => {},
+      { capabilities: [vitalsCapability] },
+    );
+    assert.equal(typeof on.contributions.fetchContext, "function");
+    on.dispose();
+  });
+});
