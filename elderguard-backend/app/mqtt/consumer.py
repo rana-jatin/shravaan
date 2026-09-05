@@ -31,6 +31,7 @@ behind a seam.
 import asyncio
 import json
 import logging
+from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -218,16 +219,67 @@ async def apply_command(db: AsyncSession, command: Command) -> bool:
 
 
 class TelemetryMQTTConsumer:
-    def __init__(self) -> None:
+    """
+    Bridges paho's network thread to the application's event loop.
+
+    ─────────────────────────────────────────────────────────────────────────
+    WHY NOT `asyncio.run`, WHICH IS WHAT THIS USED TO DO.
+
+    `asyncio.run` builds a BRAND NEW event loop, runs the coroutine on it, and
+    closes it. Doing that per message puts the database work on a loop the
+    engine's connections do not belong to: asyncpg binds a connection to the
+    loop that opened it, so the pool built during startup is unusable from
+    here. The failure is the familiar "attached to a different loop", and it
+    degrades with traffic rather than failing cleanly on the first message —
+    the worst shape for something a family is relying on.
+
+    It is not theoretical. Driving the old path from a test deadlocked
+    outright, because the loop closed while the driver thread was still live.
+
+    So the loop is captured at `connect()` — which the app lifespan calls from
+    inside the running loop — and every message is handed to it with
+    `run_coroutine_threadsafe`. One loop, one pool, one owner.
+    ─────────────────────────────────────────────────────────────────────────
+    """
+
+    #: Writes allowed in flight before telemetry starts being shed. A broker
+    #: replaying a backlog can deliver far faster than Postgres will accept,
+    #: and a queue with no ceiling is a memory leak with extra steps. An SOS is
+    #: NEVER shed — see `_dispatch`.
+    MAX_INFLIGHT = 256
+
+    def __init__(self, session_factory: Any = None) -> None:
         if mqtt is None:
             raise RuntimeError("paho-mqtt is required for MQTT telemetry ingestion")
         self.client = mqtt.Client(client_id=settings.mqtt_client_id)
         if settings.mqtt_username and settings.mqtt_password:
             self.client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
 
-    def connect(self) -> None:
-        self.client.connect(settings.mqtt_broker_host, settings.mqtt_broker_port, 60)
+        # Injectable so a test can supply its own database. Everything else in
+        # this repo that leaves the process takes its client the same way.
+        self._session_factory = session_factory or AsyncSessionLocal
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # Strong references. `run_coroutine_threadsafe` does not keep one, and
+        # a future nobody holds can be collected before it finishes.
+        self._inflight: set[Future[None]] = set()
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """
+        Name the loop that database work will run on.
+
+        Separate from `connect` so it can be established without a broker —
+        which is what lets a test drive `_on_message` from a real worker
+        thread, the arrangement paho actually uses, instead of asserting
+        against a stub.
+        """
+        self._loop = loop or asyncio.get_running_loop()
+
+    def connect(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self.bind_loop(loop)
+        # Set BEFORE connecting. Registering the handler afterwards leaves a
+        # window where a message could arrive with nothing to receive it.
         self.client.on_message = self._on_message
+        self.client.connect(settings.mqtt_broker_host, settings.mqtt_broker_port, 60)
         self.client.subscribe(TELEMETRY_TOPIC, qos=settings.mqtt_qos)
         self.client.subscribe(SOS_TOPIC, qos=settings.mqtt_qos)
         self.client.loop_start()
@@ -235,6 +287,8 @@ class TelemetryMQTTConsumer:
     def disconnect(self) -> None:
         self.client.loop_stop()
         self.client.disconnect()
+        # Stop accepting work before the loop this points at goes away.
+        self._loop = None
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
         """
@@ -248,12 +302,55 @@ class TelemetryMQTTConsumer:
             command = parse_message(str(message.topic), message.payload)
             if command is None:
                 return
-            asyncio.run(self._run(command))
+            self._dispatch(command)
         except Exception:
             logger.exception("mqtt_message_failed", extra={"topic": str(message.topic)})
 
+    def _dispatch(self, command: Command) -> None:
+        """Hand one command to the application loop. Never blocks paho."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            # Shutdown, or a consumer that was never connected. Say so loudly:
+            # a dropped SOS is the failure this whole module exists to avoid.
+            logger.error(
+                "mqtt_no_event_loop",
+                extra={"command": type(command).__name__, "device_id": str(command.device_id)},
+            )
+            return
+
+        # Backpressure applies to telemetry only. A reading is one of thousands
+        # and the next one is a second away; an SOS happens once and matters.
+        if isinstance(command, TelemetryCommand) and len(self._inflight) >= self.MAX_INFLIGHT:
+            logger.warning("mqtt_telemetry_shed", extra={"inflight": len(self._inflight)})
+            return
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._run(command), loop)
+        except RuntimeError:
+            # The loop closed between the check above and here.
+            logger.exception("mqtt_dispatch_failed", extra={"device_id": str(command.device_id)})
+            return
+
+        self._inflight.add(future)
+        future.add_done_callback(self._finished)
+
+    def _finished(self, future: "Future[None]") -> None:
+        """
+        Consume the result, or the exception disappears into the future.
+
+        Fire-and-forget without this is how the original defect stayed silent
+        for so long: the work failed and nothing anywhere said so.
+        """
+        self._inflight.discard(future)
+        try:
+            future.result()
+        except CancelledError:
+            logger.warning("mqtt_write_cancelled")
+        except Exception:
+            logger.exception("mqtt_write_failed")
+
     async def _run(self, command: Command) -> None:
-        async with AsyncSessionLocal() as db:
+        async with self._session_factory() as db:
             await apply_command(db, command)
 
 

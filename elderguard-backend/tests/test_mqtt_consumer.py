@@ -7,6 +7,8 @@ hardware button produced no alert and no log line. These tests call the parser
 and the writer directly; neither needs a broker.
 """
 
+import asyncio
+import logging
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -19,6 +21,7 @@ from app.models.telemetry import Alert, AlertType, MotionState, TelemetryRecord
 from app.mqtt.consumer import (
     SosCommand,
     TelemetryCommand,
+    TelemetryMQTTConsumer,
     apply_command,
     parse_message,
 )
@@ -243,59 +246,212 @@ async def test_telemetry_without_a_timestamp_is_accepted_and_stamped(
         assert await apply_command(db, command) is True
 
 
+# ── the broker thread ──────────────────────────────────────────────────────
+
+
+class Message:
+    """What paho hands the callback."""
+
+    def __init__(self, topic: str, payload: Any) -> None:
+        self.topic = topic
+        self.payload = payload
+
+
+async def drain(consumer: "TelemetryMQTTConsumer") -> None:
+    """Wait for every write the consumer dispatched."""
+    for future in list(consumer._inflight):
+        await asyncio.wrap_future(future)
+
+
+async def test_a_broker_message_reaches_the_database_from_another_thread(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """
+    The arrangement paho actually uses: the callback fires on a network thread
+    while the database belongs to the application's loop.
+
+    This is the test that could not be written before. Driving the old
+    `asyncio.run`-per-message path from here deadlocked outright, because that
+    built a second loop and closed it under the connection pool.
+    """
+    await make_device(db_sessionmaker)
+
+    consumer = TelemetryMQTTConsumer(session_factory=db_sessionmaker)
+    consumer.bind_loop()
+
+    await asyncio.to_thread(
+        consumer._on_message, None, None, Message(sos_topic(), b'{"button": "held"}')
+    )
+    await drain(consumer)
+
+    async with db_sessionmaker() as db:
+        alert = (await db.execute(select(Alert))).scalar_one()
+        assert alert.alert_type == AlertType.SOS
+        assert alert.details == {"button": "held"}
+
+
+async def test_repeated_messages_from_the_broker_thread_are_all_recorded(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """
+    The bridge holds across many messages, not just the first.
+
+    Each write is drained before the next is published, and that is a LIMIT OF
+    THE HARNESS rather than a claim about production. The test database is one
+    SQLite connection shared through a StaticPool, so several sessions writing
+    at once interleave on a single transaction and silently lose rows —
+    SQLAlchemy's documented hazard for sharing a connection across concurrent
+    tasks. Postgres hands each session its own connection from a real pool, so
+    genuine write concurrency belongs in a test against Postgres. Recorded as a
+    follow-up rather than faked here.
+    """
+    await make_device(db_sessionmaker)
+
+    consumer = TelemetryMQTTConsumer(session_factory=db_sessionmaker)
+    consumer.bind_loop()
+
+    for beat in (70, 72, 74, 76, 78):
+        await asyncio.to_thread(
+            consumer._on_message,
+            None,
+            None,
+            Message(telemetry_topic(), f'{{"heart_rate_bpm": {beat}}}'.encode()),
+        )
+        await drain(consumer)
+
+    async with db_sessionmaker() as db:
+        records = (await db.execute(select(TelemetryRecord))).scalars().all()
+        assert sorted(r.heart_rate_bpm for r in records) == [70, 72, 74, 76, 78]
+
+
+async def test_several_messages_in_flight_all_complete(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """
+    What CAN be asserted about concurrency here: every write the broker thread
+    dispatched runs to completion without raising, and the consumer's in-flight
+    set empties. Whether all the rows land is the harness limitation above.
+    """
+    await make_device(db_sessionmaker)
+
+    consumer = TelemetryMQTTConsumer(session_factory=db_sessionmaker)
+    consumer.bind_loop()
+
+    def publish_burst() -> None:
+        for beat in (70, 72, 74, 76, 78):
+            consumer._on_message(
+                None, None, Message(telemetry_topic(), f'{{"heart_rate_bpm": {beat}}}'.encode())
+            )
+
+    await asyncio.to_thread(publish_burst)
+    await drain(consumer)
+
+    assert not consumer._inflight, "every dispatched write must be accounted for"
+
+
+async def test_telemetry_is_shed_under_backpressure_but_an_sos_never_is(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A broker replaying a backlog can deliver faster than the database accepts.
+    Dropping a reading is a gap in a chart; dropping an SOS is the failure this
+    module exists to prevent, so the ceiling applies to one and not the other.
+    """
+    await make_device(db_sessionmaker)
+
+    consumer = TelemetryMQTTConsumer(session_factory=db_sessionmaker)
+    consumer.bind_loop()
+    monkeypatch.setattr(TelemetryMQTTConsumer, "MAX_INFLIGHT", 0)
+
+    await asyncio.to_thread(
+        consumer._on_message, None, None, Message(telemetry_topic(), b'{"heart_rate_bpm": 72}')
+    )
+    await asyncio.to_thread(
+        consumer._on_message, None, None, Message(sos_topic(), b'{"button": "held"}')
+    )
+    await drain(consumer)
+
+    async with db_sessionmaker() as db:
+        assert (await db.execute(select(TelemetryRecord))).first() is None
+        assert (await db.execute(select(Alert))).scalar_one() is not None
+
+
+async def test_a_message_arriving_after_shutdown_is_logged_not_raised(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """
+    Messages can arrive between `loop_stop` and the loop going away. Without
+    the guard this is where `run_coroutine_threadsafe` raises, on paho's
+    thread, where nobody would see it.
+    """
+    consumer = TelemetryMQTTConsumer(session_factory=db_sessionmaker)
+    consumer.bind_loop()
+    consumer._loop = None
+
+    await asyncio.to_thread(
+        consumer._on_message, None, None, Message(sos_topic(), b'{"button": "held"}')
+    )
+    assert not consumer._inflight
+
+
+async def test_a_failing_write_is_logged_rather_than_lost(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Fire-and-forget swallows exceptions unless somebody consumes the future.
+    That is precisely how the original defect stayed invisible.
+    """
+
+    class BrokenSessionFactory:
+        def __call__(self) -> Any:
+            raise RuntimeError("the database is unreachable")
+
+    consumer = TelemetryMQTTConsumer(session_factory=BrokenSessionFactory())
+    consumer.bind_loop()
+
+    with caplog.at_level(logging.ERROR):
+        await asyncio.to_thread(
+            consumer._on_message, None, None, Message(sos_topic(), b'{"button": "held"}')
+        )
+        for future in list(consumer._inflight):
+            with pytest.raises(RuntimeError):
+                await asyncio.wrap_future(future)
+
+    assert any("mqtt_write_failed" in record.message for record in caplog.records)
+
+
 def test_the_broker_callback_never_lets_an_exception_escape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
     paho runs `_on_message` on its own network thread and swallows whatever it
     raises. That is how the SOS crash stayed invisible, so nothing may escape
-    here — not even a message that is complete nonsense, and not even when the
-    database work itself fails.
+    here — not for a message that is complete nonsense, and not when the
+    dispatch below it fails.
 
-    The database work is STUBBED rather than exercised, and deliberately so.
-    `_on_message` still calls `asyncio.run` per message, which spins up a fresh
-    event loop while the engine's connection thread belongs to another one —
-    driving it for real from a test deadlocks. That is the next step in the
-    plan; this test covers the callback's own contract and nothing else.
+    No loop is bound, so dispatch takes the shutdown branch and logs. The
+    threaded tests above are what cover the loop actually running.
     """
-    from app.mqtt.consumer import TelemetryMQTTConsumer
+    consumer = TelemetryMQTTConsumer()
 
-    class Message:
-        def __init__(self, topic: str, payload: Any) -> None:
-            self.topic = topic
-            self.payload = payload
-
-    dispatched: list[Any] = []
-
-    async def record(self: Any, command: Any) -> None:
-        dispatched.append(command)
-
-    async def explode(self: Any, command: Any) -> None:
-        raise RuntimeError("the database is unreachable")
-
-    # Built without __init__, which wants a broker. Only the callback is under test.
-    consumer = object.__new__(TelemetryMQTTConsumer)
-
-    monkeypatch.setattr(TelemetryMQTTConsumer, "_run", record)
-    for message in (
-        Message(sos_topic(), b'{"button": "held"}'),
-        Message(telemetry_topic(), b'{"heart_rate_bpm": 72}'),
-    ):
-        TelemetryMQTTConsumer._on_message(consumer, None, None, message)
-    assert len(dispatched) == 2, "a valid message must reach the database layer"
-
-    # Nonsense reaches the parser, is refused there, and never gets this far.
     for message in (
         Message("garbage", b""),
         Message("shravaan/devices/not-a-uuid/sos", b"{}"),
         Message(telemetry_topic(), b"not json"),
         Message(sos_topic(), None),
         Message(sos_topic(), object()),
+        Message(sos_topic(), b'{"button": "held"}'),
     ):
         TelemetryMQTTConsumer._on_message(consumer, None, None, message)
 
-    # And a failure below the parser is logged, not raised into paho's thread.
-    monkeypatch.setattr(TelemetryMQTTConsumer, "_run", explode)
+    assert not consumer._inflight
+
+    def explode(self: Any, command: Any) -> None:
+        raise RuntimeError("dispatch is broken")
+
+    monkeypatch.setattr(TelemetryMQTTConsumer, "_dispatch", explode)
     TelemetryMQTTConsumer._on_message(
         consumer, None, None, Message(sos_topic(), b'{"button": "held"}')
     )
