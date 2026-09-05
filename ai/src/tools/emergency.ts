@@ -28,7 +28,8 @@
  */
 
 import type { LanguageCode } from "@sp-i/shared/domain/types.ts";
-import type { MailMessage, MailSender } from "../providers/smtp.ts";
+import { Notifier } from "../notify/notifier.ts";
+import type { Notification, NotificationChannel } from "../notify/types.ts";
 import type { ToolSpec } from "./registry.ts";
 
 /** Sending takes as long as it takes; the ack is already spoken by then. */
@@ -122,7 +123,15 @@ function deriveName(email: string): string {
 }
 
 export type AlerterDeps = {
-  send: MailSender;
+  /**
+   * Every way of reaching the contacts, tried in order.
+   *
+   * This was a single `MailSender`. It is a list because a phone on silent and
+   * an unread inbox fail in uncorrelated ways, and SMS, a call or WhatsApp
+   * should be a new module rather than an edit to the alarm path. Deployments
+   * today configure exactly one — email — and behave as they always did.
+   */
+  channels: NotificationChannel[];
   contacts: EmergencyContact[];
   cooldownMs?: number;
   now?: () => number;
@@ -133,6 +142,7 @@ export class EmergencyAlerter {
   readonly #d: AlerterDeps;
   readonly #cooldownMs: number;
   readonly #now: () => number;
+  readonly #notifier: Notifier;
   /** Per session: a burst is one event, but two sessions are two people. */
   readonly #last = new Map<string, { at: number; repeats: number }>();
 
@@ -140,6 +150,12 @@ export class EmergencyAlerter {
     this.#d = deps;
     this.#cooldownMs = deps.cooldownMs ?? DEFAULT_COOLDOWN_MS;
     this.#now = deps.now ?? Date.now;
+    // The retry lives here now — it is a delivery concern, not an emergency
+    // one, and a medication reminder deserves the same one attempt back.
+    this.#notifier = new Notifier({
+      channels: deps.channels,
+      ...(deps.log ? { log: deps.log } : {}),
+    });
   }
 
   get contacts(): EmergencyContact[] {
@@ -179,32 +195,18 @@ export class EmergencyAlerter {
     const repeats = prior ? prior.repeats : 0;
     this.#last.set(input.sid, { at: now, repeats: 0 });
 
-    const message = compose(input, this.#d.contacts, repeats);
+    const notification = compose(input, this.#d.contacts, repeats);
+    const outcome = await this.#notifier.send(notification);
 
-    // ONE retry, immediately. A transient TCP failure to a mail relay is common
-    // and cheap to retry; a rejected password will fail the same way twice and
-    // the second attempt costs a second. Beyond that the user needs to be told
-    // rather than kept waiting.
-    let lastError: unknown = null;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        await this.#d.send(message);
-        this.#d.log?.("warn", "EMERGENCY ALERT SENT", {
-          sid: input.sid,
-          uid: input.uid,
-          to,
-          trigger: input.trigger,
-          attempt,
-        });
-        return { sent: true, contacts: to, suppressed: false, repeats: 0 };
-      } catch (err) {
-        lastError = err;
-        this.#d.log?.("error", "emergency alert send failed", {
-          sid: input.sid,
-          attempt,
-          error: String(err instanceof Error ? err.message : err),
-        });
-      }
+    if (outcome.delivered) {
+      this.#d.log?.("warn", "EMERGENCY ALERT SENT", {
+        sid: input.sid,
+        uid: input.uid,
+        to,
+        trigger: input.trigger,
+        channels: outcome.results.filter((r) => r.delivered.length > 0).map((r) => r.kind),
+      });
+      return { sent: true, contacts: to, suppressed: false, repeats: 0 };
     }
 
     // The alert did not go out. Clear the cooldown so the NEXT cry for help
@@ -215,7 +217,7 @@ export class EmergencyAlerter {
       contacts: to,
       suppressed: false,
       repeats: 0,
-      error: String(lastError instanceof Error ? lastError.message : lastError),
+      error: Notifier.firstError(outcome) ?? "no channel could reach anyone",
     };
   }
 }
@@ -239,7 +241,7 @@ function compose(
   input: AlertInput,
   contacts: EmergencyContact[],
   earlierRepeats: number,
-): MailMessage {
+): Notification {
   const when = new Date().toLocaleString("en-IN", {
     timeZone: input.timezone,
     dateStyle: "full",
@@ -283,10 +285,18 @@ function compose(
   );
 
   return {
-    to: contacts.map((c) => c.email),
+    urgency: "emergency",
+    // An `EmergencyContact` is already a valid `Recipient` — a name and an
+    // email — so nothing is mapped. Each channel picks the address it needs.
+    to: contacts,
     // No emoji, no cleverness: this is what shows on a notification.
     subject: "EMERGENCY: someone has asked this device for help",
-    text: lines.join("\n"),
+    body: lines.join("\n"),
+    // For a channel with a hard length limit. Truncating the body at 160
+    // characters is how "I could not reach anyone" becomes "I could not".
+    short:
+      `EMERGENCY: they asked this device for help — ` +
+      `"${input.spoken.trim().slice(0, 80)}". Please check on them now.`,
   };
 }
 

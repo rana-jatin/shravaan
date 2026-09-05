@@ -17,6 +17,7 @@
 
 import { createRaiseAlarm, EmergencyAlerter, parseContacts } from "../tools/emergency.ts";
 import { createSmtpSender, type MailSender } from "../providers/smtp.ts";
+import { emailChannel } from "../notify/email.ts";
 import { createHttpMailSender } from "../providers/mail-api.ts";
 import { pendingEmergencyReview } from "../copy/emergency-intent.ts";
 import type { Capability, CapabilityReport } from "./types.ts";
@@ -90,7 +91,9 @@ export const emergencyCapability: Capability = {
     }
 
     const alerter = new EmergencyAlerter({
-      send: mailSender,
+      // One channel today. SMS, a call or WhatsApp arrive as more entries
+      // here, not as edits to the alarm path. See notify/types.ts.
+      channels: [emailChannel(mailSender)],
       contacts,
       cooldownMs: cfg.emergency.cooldownMs,
       log,

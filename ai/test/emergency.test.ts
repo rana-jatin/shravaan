@@ -24,6 +24,7 @@ import { after, describe, it } from "node:test";
 import { EMERGENCY_ACK, EMERGENCY_FAILED, matchEmergency } from "../src/copy/emergency-intent.ts";
 import { SPEAKABLE } from "../src/domain/languages.ts";
 import { createSmtpSender, type MailMessage } from "../src/providers/smtp.ts";
+import { emailChannel } from "../src/notify/email.ts";
 import {
   createHttpMailSender,
   explainMailApiError,
@@ -159,8 +160,11 @@ describe("raising the alarm", () => {
     trigger: "repeated" as const,
   };
 
+  // A MailSender still describes what these tests care about — what lands in
+  // an inbox — so it is wrapped rather than replaced. The channel seam is what
+  // changed; the alarm's behaviour is not.
   function alerter(send: (m: MailMessage) => Promise<void>, over = {}) {
-    return new EmergencyAlerter({ send, contacts: CONTACTS, ...over });
+    return new EmergencyAlerter({ channels: [emailChannel(send)], contacts: CONTACTS, ...over });
   }
 
   it("emails every contact", async () => {
@@ -290,7 +294,7 @@ describe("raising the alarm", () => {
   });
 
   it("says so rather than pretending when there are no contacts", async () => {
-    const a = new EmergencyAlerter({ send: async () => {}, contacts: [] });
+    const a = new EmergencyAlerter({ channels: [emailChannel(async () => {})], contacts: [] });
     const out = await a.raise(input);
     assert.equal(out.sent, false);
     assert.match(out.error!, /no contacts/);
@@ -305,9 +309,11 @@ describe("the raise_alarm tool", () => {
     // one failure worse than having no alarm.
     const spec = createRaiseAlarm(
       new EmergencyAlerter({
-        send: async () => {
-          throw new Error("relay down");
-        },
+        channels: [
+          emailChannel(async () => {
+            throw new Error("relay down");
+          }),
+        ],
         contacts: CONTACTS,
       }),
     );
@@ -319,7 +325,7 @@ describe("the raise_alarm tool", () => {
 
   it("reports success with the names the user knows", async () => {
     const spec = createRaiseAlarm(
-      new EmergencyAlerter({ send: async () => {}, contacts: CONTACTS }),
+      new EmergencyAlerter({ channels: [emailChannel(async () => {})], contacts: CONTACTS }),
     );
     const out = await spec.handler({ what_happened: "Chest pain" }, ctx());
     assert.equal(out["alerted"], true);
@@ -328,7 +334,7 @@ describe("the raise_alarm tool", () => {
 
   it("is described so the model does not ask permission first", () => {
     const spec = createRaiseAlarm(
-      new EmergencyAlerter({ send: async () => {}, contacts: CONTACTS }),
+      new EmergencyAlerter({ channels: [emailChannel(async () => {})], contacts: CONTACTS }),
     );
     assert.match(spec.description, /do not ask their permission/i);
     assert.equal(spec.progress_key, "progress.mail");
