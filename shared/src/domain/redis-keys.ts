@@ -26,6 +26,14 @@ export const TTL = {
    * Invalidated explicitly when the memory worker commits.
    */
   USER_PROFILE_SECONDS: 7 * 24 * 60 * 60,
+  /**
+   * A BACKSTOP, not a lifetime. An escalation is deleted the moment it settles;
+   * this only catches a record whose sweeper died before it could. Two days is
+   * long enough that no live reminder is ever cut short, and short enough that a
+   * forgotten one cannot quietly become a history of somebody's medication —
+   * see the note on `EscalationStore`.
+   */
+  ESCALATION_SECONDS: 48 * 60 * 60,
 } as const;
 
 /** Last N turns kept for the LLM window. */
@@ -58,6 +66,17 @@ export const key = {
   scheduleIndex: () => `sched:index:all`,
   /** One person's schedule ids. */
   userScheduleIndex: (uid: string) => `sched:index:user:${uid}`,
+
+  /**
+   * Reminders that are mid-ladder. Unlike a schedule these DO expire, and the
+   * asymmetry is the point: a schedule is a standing instruction, an escalation
+   * is one morning's unfinished business.
+   */
+  escalation: (id: string) => `esc:id:${id}`,
+  /** Every open escalation, for the sweep. */
+  escalationIndex: () => `esc:index:open`,
+  /** One person's open escalations. */
+  userEscalationIndex: (uid: string) => `esc:index:user:${uid}`,
 } as const;
 
 /** Every key belonging to a session, for teardown. */
