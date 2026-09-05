@@ -37,10 +37,25 @@ class TelemetryRecord(Base):
     heart_rate_bpm: Mapped[float | None] = mapped_column(Float)
     spo2_percent: Mapped[float | None] = mapped_column(Float)
     temperature_c: Mapped[float | None] = mapped_column(Float)
+    # THE THREE A PERSON RECITES RATHER THAN A WRISTBAND MEASURING. No consumer
+    # band reads blood pressure or blood sugar, and those are the two numbers an
+    # elderly person in this country actually keeps track of and repeats out
+    # loud. Without somewhere to put them, the companion hearing "my sugar was
+    # one thirty this morning" could only say something agreeable and drop it.
+    systolic_mmhg: Mapped[float | None] = mapped_column(Float)
+    diastolic_mmhg: Mapped[float | None] = mapped_column(Float)
+    glucose_mgdl: Mapped[float | None] = mapped_column(Float)
     motion_state: Mapped[MotionState] = mapped_column(
         Enum(MotionState, name="motion_state", values_callable=lambda enum: [item.value for item in enum]),
         default=MotionState.UNKNOWN,
     )
+    # WHERE THE NUMBER CAME FROM, and it is not bookkeeping. A reading a sensor
+    # took and a number somebody remembered over breakfast are not the same
+    # kind of fact, and anyone reading this table later — a caregiver, a
+    # dashboard, a doctor — has to be able to tell them apart without guessing.
+    # A plain string rather than an enum because the set is open: every new way
+    # a reading can arrive should not be a migration.
+    source: Mapped[str] = mapped_column(String(32), default="device")
     raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

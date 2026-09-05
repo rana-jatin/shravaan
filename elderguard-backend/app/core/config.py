@@ -30,6 +30,21 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     log_level: str = "INFO"
     telemetry_batch_size: int = Field(default=100, ge=1, le=1000)
+    #: Whether an out-of-range reading raises an alert row at all.
+    #:
+    #: ON BY DEFAULT, unlike almost everything else here, because the
+    #: alternative is what this service did before: store vital signs and
+    #: never look at them. It stays a switch because a deployment feeding this
+    #: from a bench rig or a dataset replay would otherwise generate alerts
+    #: about nobody.
+    anomaly_alerts_enabled: bool = True
+    #: How long the same kind of alert folds into the one already raised.
+    #:
+    #: Fifteen minutes is the same judgement as the companion's two-minute
+    #: emergency cooldown, scaled to a slower event: a pulse that is still out
+    #: of range a quarter of an hour later is worth raising again, and one
+    #: that is out of range for six consecutive readings is not six events.
+    anomaly_cooldown_minutes: int = Field(default=15, ge=1, le=1440)
     mqtt_enabled: bool = False
     mqtt_broker_host: str = "localhost"
     mqtt_broker_port: int = 1883

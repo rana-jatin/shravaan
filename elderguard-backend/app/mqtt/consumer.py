@@ -43,7 +43,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.device import Device
 from app.models.telemetry import Alert, AlertType, MotionState
-from app.schemas.telemetry import TelemetryPoint
+from app.schemas.telemetry import METRIC_FIELDS, TelemetryPoint
 from app.services.notification_service import dispatch_emergency_alert
 from app.services.telemetry_service import save_telemetry_batch
 
@@ -146,7 +146,11 @@ def parse_message(topic: str, raw: bytes) -> Command | None:
         "motion_state": payload.get("motion_state") or MotionState.UNKNOWN.value,
         "raw_payload": payload.get("raw_payload") or {"source": "mqtt"},
     }
-    for key in ("recorded_at", "event_id", "heart_rate_bpm", "spo2_percent", "temperature_c"):
+    # METRIC_FIELDS rather than a list written out again here. A metric added to
+    # the schema and forgotten in this loop would be accepted over HTTP and
+    # silently dropped over MQTT — which is the harder of the two to notice,
+    # because the device gets its acknowledgement either way.
+    for key in ("recorded_at", "event_id", *METRIC_FIELDS):
         if payload.get(key) is not None:
             fields[key] = payload[key]
 

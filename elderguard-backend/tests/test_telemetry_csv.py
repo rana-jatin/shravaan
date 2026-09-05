@@ -67,3 +67,29 @@ def test_the_row_cap_is_enforced() -> None:
     rows = "".join(f"2026-09-01T09:00:00Z,72,98,36.6,still\n" for _ in range(6))
     with pytest.raises(ValueError, match="more than 4"):
         parse_csv_points(f"{HEADER}\n{rows}", max_points=4)
+
+
+def test_blood_pressure_and_glucose_columns_are_read() -> None:
+    """The two numbers a person recites, arriving the other way: a spreadsheet."""
+    points = parse_csv_points(
+        "recorded_at,systolic_mmhg,diastolic_mmhg,glucose_mgdl\n"
+        "2026-09-01T09:00:00Z,138,86,124\n"
+    )
+    assert (points[0].systolic_mmhg, points[0].diastolic_mmhg) == (138, 86)
+    assert points[0].glucose_mgdl == 124
+
+
+def test_a_lone_systolic_is_rejected() -> None:
+    # "140 over —" is not half a reading, it is an unreadable one, and the
+    # anomaly bands would score the missing half as though it were fine.
+    with pytest.raises(ValueError):
+        parse_csv_points("recorded_at,systolic_mmhg\n2026-09-01T09:00:00Z,140\n")
+
+
+def test_an_uploaded_file_cannot_claim_to_be_a_sensor() -> None:
+    # Whoever typed the file, it is a file. `source` is overridden rather than
+    # read, so a spreadsheet column saying "device" changes nothing.
+    points = parse_csv_points(
+        f"{HEADER},source\n2026-09-01T09:00:00Z,72,98,36.6,still,device\n"
+    )
+    assert points[0].source == "csv_upload"
