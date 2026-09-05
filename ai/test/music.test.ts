@@ -611,3 +611,71 @@ describe("overlapping refreshes", () => {
     assert.equal(attempts, 2);
   });
 });
+
+describe("stopping a refresh that is still running", () => {
+  it("abandons the pass rather than finishing eleven queries", async () => {
+    // A pass is eleven sequential queries at ~1.7s each, so one can be most of
+    // twenty seconds long. Clearing the interval stops new passes; without this
+    // the one already running kept the process alive to the end of it.
+    const controller = new AbortController();
+    const asked: string[] = [];
+    const fetch: HttpFetch = async (url) => {
+      asked.push(url);
+      if (asked.length === 1) controller.abort();
+      if (controller.signal.aborted) throw new Error("aborted");
+      return { ok: true, status: 200, text: async () => JSON.stringify([station()]) };
+    };
+
+    const cat = new RadioCatalogue({
+      apiBase: "https://dir.test",
+      languages: ["hi-IN", "bn-IN", "ta-IN", "te-IN"],
+      fallbackLanguage: "hi-IN",
+      fetch,
+    });
+
+    await cat.refresh(controller.signal);
+    assert.equal(asked.length, 1, "kept querying after the abort");
+  });
+
+  it("does not report giving up as eleven separate failures", async () => {
+    // Shutting the server down would otherwise print one "refresh failed for
+    // one language" per remaining language, about a directory that was fine.
+    const controller = new AbortController();
+    const lines: string[] = [];
+    const fetch: HttpFetch = async () => {
+      controller.abort();
+      throw new Error("aborted");
+    };
+
+    const cat = new RadioCatalogue({
+      apiBase: "https://dir.test",
+      languages: ["hi-IN", "bn-IN", "ta-IN"],
+      fallbackLanguage: "hi-IN",
+      fetch,
+      log: (level, msg) => lines.push(`${level}:${msg}`),
+    });
+
+    await cat.refresh(controller.signal);
+    assert.equal(lines.filter((l) => l.includes("failed for one language")).length, 0);
+    assert.ok(lines.some((l) => l.includes("stopped part-way")));
+  });
+
+  it("does not claim to have refreshed after a partial pass", async () => {
+    // `refreshedAt` is what a reader checks to decide whether a missing
+    // language is missing upstream or simply not fetched yet.
+    const controller = new AbortController();
+    const fetch: HttpFetch = async () => {
+      controller.abort();
+      throw new Error("aborted");
+    };
+    const cat = new RadioCatalogue({
+      apiBase: "https://dir.test",
+      languages: ["hi-IN"],
+      fallbackLanguage: "hi-IN",
+      fetch,
+    });
+
+    await cat.refresh(controller.signal);
+    assert.equal(cat.refreshedAt, null);
+  });
+});

@@ -171,12 +171,25 @@ export class RadioCatalogue {
         if (stations.length > 0) this.#stations.set(language, stations);
         else if (!this.#stations.has(language)) this.#stations.set(language, []);
       } catch (err) {
+        // GIVING UP IS NOT ELEVEN FAILURES. An aborted pass would otherwise
+        // report one "refresh failed" per remaining language, so shutting the
+        // server down would print ten warnings about a volunteer directory that
+        // was working fine.
+        if (signal?.aborted) break;
         this.#d.log?.("warn", "radio refresh failed for one language", {
           language,
           err: err instanceof Error ? err.message : String(err),
           keeping: this.#stations.get(language)?.length ?? 0,
         });
       }
+    }
+
+    if (signal?.aborted) {
+      // NOT `refreshedAt`, and not the "refreshed" line: a partial pass has not
+      // refreshed the catalogue, and saying so would make the next reader think
+      // the missing languages were missing upstream.
+      this.#d.log?.("info", "radio refresh stopped part-way", { covered: this.covered });
+      return;
     }
 
     this.#refreshedAt = Date.now();
