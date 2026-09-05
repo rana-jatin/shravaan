@@ -17,7 +17,16 @@ import type { TurnEvent, TurnPhase } from "@sp-i/shared/domain/types.ts";
  */
 const TRANSITIONS: Record<TurnPhase, Partial<Record<TurnEvent["type"], TurnPhase>>> = {
   idle: { session_open: "listening" },
-  listening: { speech_start: "user_speaking", idle_timeout: "idle" },
+  // `proactive_speech` is legal from HERE AND NOWHERE ELSE. Not from
+  // `user_speaking`, where it would talk over somebody mid-sentence; not from
+  // `thinking` or `speaking`, where it would cut across the agent's own reply;
+  // not from `idle`, where there is no TTS socket to say it down. A reminder
+  // that cannot find a gap is a reminder that waits — see Session.
+  listening: {
+    speech_start: "user_speaking",
+    idle_timeout: "idle",
+    proactive_speech: "speaking",
+  },
   user_speaking: { partial: "user_speaking", speech_end: "thinking" },
   thinking: { first_clause_ready: "speaking", tool_dispatched: "tool_wait" },
   tool_wait: { tool_result: "speaking", first_clause_ready: "speaking" },

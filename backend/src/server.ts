@@ -32,6 +32,7 @@ import { redundancyProfile } from "@sp-i/ai/domain/asr-failover.ts";
 import { pendingNativeReview } from "@sp-i/ai/copy/refusals.ts";
 import { pendingCopyReview } from "@sp-i/ai/copy/fillers.ts";
 import { Session } from "@sp-i/ai/orchestrator/session.ts";
+import { SessionRegistry } from "@sp-i/ai/orchestrator/session-registry.ts";
 import { HoldingAudio } from "@sp-i/ai/audio/holding-audio.ts";
 import { buildMemory } from "./composition/memory.ts";
 import { buildScheduleStore, startScheduler } from "./composition/scheduler.ts";
@@ -127,6 +128,11 @@ export function start(): ServerHandle {
       : "disabled by default; enabling relocates audio out of India (docs/05 Q14)",
   });
 
+  // Who is live right now. Nothing reads it yet — medication reminders are the
+  // first caller — but it has to be filled from the moment sessions exist, or
+  // the first reminder finds an empty room that was never empty.
+  const sessions = new SessionRegistry();
+
   const wss = new WebSocketServer({ port: cfg.port });
   log("info", "listening", {
     port: cfg.port,
@@ -190,11 +196,18 @@ export function start(): ServerHandle {
           },
         });
         ws.send(JSON.stringify({ type: "ready", sid: session.sid }));
+        sessions.add(session);
         void session.start();
       }
     });
 
-    ws.on("close", () => session?.close("device_disconnected"));
+    ws.on("close", () => {
+      // Removed before close(), so nothing can be handed a session that is
+      // already tearing down its sockets. The registry prunes closed sessions
+      // on read as well — a session can end without the socket doing so.
+      if (session) sessions.remove(session.sid);
+      session?.close("device_disconnected");
+    });
     ws.on("error", (err) => log("error", "device socket", { err: err.message }));
   });
 

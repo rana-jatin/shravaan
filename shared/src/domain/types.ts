@@ -266,6 +266,14 @@ export type TurnEvent =
   | { type: "partial"; text: string }
   | { type: "speech_end"; text: string; language?: LanguageCode; confidence?: number }
   | { type: "first_clause_ready" }
+  /**
+   * The agent starts speaking without having been asked — a reminder, a
+   * check-in. Distinct from `first_clause_ready` because it is legal from a
+   * DIFFERENT phase: a reply may only begin from `thinking` or `tool_wait`,
+   * and reusing that event would have made every stray one a way to talk over
+   * somebody mid-sentence.
+   */
+  | { type: "proactive_speech" }
   | { type: "tool_dispatched" }
   | { type: "tool_result" }
   | { type: "playback_drained" }

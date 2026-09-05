@@ -79,6 +79,7 @@ import {
   type SessionDeps,
 } from "./session-deps.ts";
 import { buildMessages } from "./prompt.ts";
+import type { ProactiveResult, ProactiveSpeech } from "./session-registry.ts";
 import { TurnTimer } from "../domain/turn-timer.ts";
 import { MediaController } from "./media-controller.ts";
 
@@ -262,6 +263,22 @@ export class Session {
     return this.#phase;
   }
 
+  /** Whose conversation this is. The registry indexes on it. */
+  get uid(): string {
+    return this.#d.uid;
+  }
+
+  /**
+   * Ended, or ending.
+   *
+   * `#terminating` counts: a session on its way out through a dependency
+   * failure has already said its goodbye, and a reminder arriving behind that
+   * would be the last thing a person heard before the line went dead.
+   */
+  get closed(): boolean {
+    return this.#closed || this.#terminating;
+  }
+
   /**
    * The session as a tool sees it — see SessionToolHost.
    *
@@ -398,6 +415,84 @@ export class Session {
    */
   mediaEnded(): void {
     this.#media.endedOnDevice();
+  }
+
+  /**
+   * Say something nobody asked for, then listen for the answer.
+   *
+   * ───────────────────────────────────────────────────────────────────────────
+   * THE ONLY WAY INTO A CONVERSATION FROM OUTSIDE IT, and it is one sentence
+   * wide. It does not run a turn, call the model, or dispatch a tool: a
+   * background job that could do those things could hold somebody's attention
+   * indefinitely, and nobody outside the room would see it happening.
+   *
+   * IT REFUSES RATHER THAN WAITS. Every `spoken: false` below is an ordinary
+   * state of a conversation — someone is mid-sentence, the radio is on, the
+   * device went away — so refusing is data and the caller decides what it
+   * means. Queueing here would be the wrong home for the decision twice over:
+   * a hydration prompt that missed its gap should simply be dropped, while a
+   * medication dose should be retried on a schedule that also escalates, and
+   * this method can tell the difference between neither.
+   *
+   * THE ANSWER COMES BACK AS AN ORDINARY TURN. `playback_drained` returns the
+   * phase to `listening` exactly as it does after a reply, so "yes, I took it"
+   * is heard by the same path as everything else, and barge-in works — talking
+   * over a reminder you have already acted on is the correct thing to do.
+   * ───────────────────────────────────────────────────────────────────────────
+   */
+  async speakProactively(utterance: ProactiveSpeech): Promise<ProactiveResult> {
+    if (this.closed) return { spoken: false, reason: "closed" };
+    if (!this.#tts) return { spoken: false, reason: "no_voice" };
+    // Media is device-side, so speaking over it would be two sounds in one room
+    // — and `#onFinal` returns early while it plays, so the answer would not be
+    // heard either. Stopping it is a decision for whoever owns the content.
+    if (this.#media.playing) return { spoken: false, reason: "media" };
+
+    const language = this.#state.language;
+    const text = utterance.text(language).trim();
+    // A missing translation is not a broken session. Saying nothing is right;
+    // saying it in the wrong language, or saying "undefined", is not.
+    if (text === "") {
+      this.#log("error", "proactive speech resolved to nothing — copy is missing", {
+        reason: utterance.reason,
+        language,
+      });
+      return { spoken: false, reason: "no_copy" };
+    }
+
+    // The gap test and the claim on it, in one step. `proactive_speech` is legal
+    // only from `listening` (see domain/turn-state.ts), so an unchanged phase
+    // here IS the answer to "is this conversation busy" — and because #apply is
+    // synchronous there is no window between asking and taking it.
+    if (!this.#apply({ type: "proactive_speech" }).changed) {
+      return { spoken: false, reason: "busy" };
+    }
+
+    // Its own turn number. A reply shares a tid with the user turn it answers;
+    // this answers nothing, so borrowing the previous exchange's number would
+    // file it under a question that was never asked.
+    this.#state.turn_no += 1;
+
+    this.#log("info", "proactive speech", {
+      reason: utterance.reason,
+      language,
+      chars: text.length,
+    });
+
+    this.#emitToTts(text);
+    this.#tts.flush();
+
+    // Recorded like any other agent turn, and this is not optional: without it
+    // the next thing the person says — "what?", "say that again" — meets an
+    // agent with no idea what it just said. `repeat_that` reads this window.
+    //
+    // NO mem:writes EVENT, though. `turn_completed` carries a user_text, and
+    // there is not one; telling the distiller somebody said nothing would be a
+    // different claim from nobody having been asked. What reaches long-term
+    // memory is the REPLY to this, which arrives as an ordinary turn.
+    await this.#recordTurn({ role: "agent", text, language });
+
+    return { spoken: true, language, text };
   }
 
   #resolveSeed() {
