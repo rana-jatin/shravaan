@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { HttpFetch } from "@sp-i/shared/providers/http.ts";
-import { RadioCatalogue, type RadioCatalogueDeps } from "../src/domain/radio-catalogue.ts";
+import { RadioCatalogue, type RadioCatalogueDeps } from "../src/providers/radio-catalogue.ts";
 import { createPlayMusic, durationSeconds, pickSongLike } from "../src/tools/music.ts";
 import { ToolRegistry, toSchema, validateArgs } from "../src/tools/registry.ts";
 import type { MediaRequest } from "../src/tools/types.ts";

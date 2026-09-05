@@ -31,7 +31,7 @@
  *            described to the user.
  */
 
-import type { RadioCatalogue } from "../domain/radio-catalogue.ts";
+import type { RadioCatalogue } from "../providers/radio-catalogue.ts";
 import type { LanguageCode } from "@sp-i/shared/domain/types.ts";
 import type { ToolSpec } from "./registry.ts";
 import { getJson, nodeFetch, type HttpFetch } from "@sp-i/shared/providers/http.ts";

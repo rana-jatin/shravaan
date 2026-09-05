@@ -9,7 +9,7 @@
  */
 
 import { createPlayMusic } from "../tools/music.ts";
-import { RadioCatalogue } from "../domain/radio-catalogue.ts";
+import { RadioCatalogue } from "../providers/radio-catalogue.ts";
 import { SPEAKABLE } from "../domain/languages.ts";
 import { pendingStopReview } from "../copy/stop-intent.ts";
 import type { Capability, CapabilityReport } from "./types.ts";

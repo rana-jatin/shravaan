@@ -17,10 +17,17 @@ Indian languages, remembers across days, and lets you switch language
 mid-conversation. `frontend/` is a companion control dashboard, still a
 wiring-proof starter.
 
+It also reminds somebody about their tablets, asks how they are once a day,
+keeps the readings they say out loud, and tells their family when nobody
+answers. That half leans on `elderguard-backend/`, a Python service that
+already ingests telemetry from a wearable band and checks it against anomaly
+bands — the companion talks to it rather than keeping a second copy of anyone's
+health record.
+
 An npm workspaces monorepo: `shared`, `ai`, `backend`, `frontend` are npm
-packages (`package.json` each); `pi/` is a separate Python package (its own
-`pyproject.toml`), not an npm workspace member, meant to run on the Pi itself.
-See **Repo layout** below.
+packages (`package.json` each); `pi/` and `elderguard-backend/` are separate
+Python packages (their own `pyproject.toml`), not npm workspace members. See
+**Repo layout** below.
 
 TypeScript on Node ≥ 22.6, run directly with `--experimental-strip-types`.
 **There is no build step in `shared`/`ai`/`backend`.** No bundler, no `dist/`,
@@ -33,13 +40,24 @@ Node packages, not the browser one.
 ## Repo layout
 
 ```
-shared/    config loading, cross-cutting types, the http fetch contract
+shared/    config loading, cross-cutting types, the http fetch contract,
+           retry-with-backoff (three packages reach it)
 ai/        the turn-loop pipeline — orchestrator, ASR/LLM/TTS providers,
-           tools, memory, session store. Nearly every test lives here.
+           tools, capabilities, memory, session store, the scheduler and the
+           escalation ladder. Nearly every test lives here.
 backend/   server.ts (protocol/socket lifecycle) + composition/ (the DI root)
 frontend/  React + Vite + TS dashboard starter
 pi/        Python — the real device: mic in/speaker out, onboard sensors
+elderguard-backend/
+           Python — telemetry from the band, the anomaly bands, alerts, and
+           the identity the companion reads at the top of a session. NOT an
+           npm workspace; its own pyproject and its own pytest suite.
 ```
+
+`ai/` reaches `elderguard-backend` over HTTP and that service never calls back.
+One direction, no inbound auth on a WebSocket server, and an unreachable
+service degrades to "I cannot keep that reading" rather than half a state
+machine. See `ai/src/providers/elderguard.ts` and that package's README.
 
 `shared → ai → backend` is one-way: `ai` never imports from `backend`, and
 `shared` never imports from either. Cross-package imports are bare specifiers
@@ -92,8 +110,20 @@ pi/ ──ws──▶ backend/server.ts ──▶ ai/orchestrator Session (the t
                  │                     ├─▶ ai/tools      function calling
                  │                     ├─▶ ai/store      working memory (Redis or in-proc)
                  │                     └─▶ mem:writes ──▶ ai/memory/worker.ts ──▶ long-term
+                 │
+                 ├─▶ ai/scheduler   ticker: a schedule came due
+                 ├─▶ ai/escalation  sweep: nobody answered, climb the ladder
+                 ├─▶ ai/vitals      watcher: an alert was raised over there
+                 │                            │
+                 │                            ▼
+                 │                   elderguard-backend (HTTP, one direction)
+                 │
                  └─▶ backend/composition/  builds all of the above at boot,
                                             from ai/ + shared/config
+
+The three loops reach a live conversation through `SessionRegistry`, which
+hands back one verb: say this prepared sentence. A capability holding it cannot
+run a turn, reach the model, or read a transcript.
 ```
 
 **The layering, and it points one way.**
@@ -108,9 +138,11 @@ pi/ ──ws──▶ backend/server.ts ──▶ ai/orchestrator Session (the t
 | `server.ts` | `backend/` | Protocol, boot order, socket lifecycle. |
 
 `domain/` importing from `providers/` is a smell. `domain/radio-catalogue.ts`
-used to be the one instance — it did network I/O from inside `domain/` — and
-has since moved to `ai/src/providers/radio-catalogue.ts`. If you find another,
-move it the same way.
+was the one instance — it did network I/O from inside `domain/` — and now lives
+at `ai/src/providers/radio-catalogue.ts`. This paragraph claimed that move for a
+while before it happened, which is its own lesson: a rule the docs assert and
+the tree does not follow is worse than a rule nobody wrote down. If you find
+another, move it the same way.
 
 **No import cycles.** There were three (type-only, in `tools/`) and they are
 gone. Keep it that way; a cycle usually means a type is defined next to one of
@@ -185,8 +217,37 @@ paraphrase the numbers away.
   `backend/`'s cwd — where `npm run dev` launches the server from. Overriding
   it for some other launch method means recomputing that relative path from
   wherever the process actually starts.
-- **The Redis store contract suite has never been executed.** It is written and
-  skipped unless `REDIS_URL` is set. Run it before trusting that path.
+- **The three Redis contract suites are skipped unless `REDIS_URL` is set.**
+  Session store, schedules and escalations. They HAVE now been run against a
+  real instance and were green, so the line that used to sit here — that they
+  had never been executed — is no longer true. CI still does not run them, so
+  they will drift silently unless somebody runs them before trusting the path.
+- **Three loops, and only three.** The ticker fires a due schedule
+  (`ai/src/scheduler/`), the sweep walks an unanswered reminder up its ladder
+  (`ai/src/escalation/`), and the vitals watcher polls the safety service for
+  alerts raised where this process cannot see them (`ai/src/vitals/`). All
+  three are inert until a capability hands them work, so a default build starts
+  none of them. A fourth loop should be a conversation, not a commit.
+- **`onOccurrence` never speaks.** The sweep owns every utterance the device
+  makes without being asked, so exactly one code path says a reminder out loud
+  and exactly one decides whether it landed. A capability that spoke at
+  schedule time would make the first attempt follow different rules from the
+  retry.
+- **Nothing tells anybody their reading looked wrong.** Vitals results carry a
+  number, a unit and a time, and there is a test asserting they carry nothing
+  else — a tool result is handed to a language model and spoken aloud in the
+  same turn, so a field named `severity` is medical advice with extra steps.
+  The numbers go to the family, who can act on them; the person is asked how
+  they are, in reviewed copy. See `ai/src/capabilities/vitals.ts`.
+- **The anomaly bands live in the Python service and nowhere else.** One place
+  judges a vital sign. `ai/src/domain/vitals.ts` mirrors that service's INGEST
+  limits so a value that would bounce off the API is refused locally with a
+  reason the device can say — those are "no person has this" bounds, not
+  thresholds, and confusing the two would put a second opinion in the companion.
+- **`shared/src/providers/http.ts` retries GETs and never anything else.** The
+  method is the gate rather than the caller's diligence: retrying the POST that
+  stores somebody's blood pressure is a second row in their health record.
+  `retry: true` on a POST is ignored, and there is a test on that.
 - **Nine of eleven languages have placeholder spoken copy.** The server warns at
   boot. It is not shippable to users until a native speaker reviews it.
 - **`SYSTEM_PROMPT`'s tuning was measured on a model we no longer run.** The
@@ -223,4 +284,6 @@ paraphrase the numbers away.
 | `docs/03-latency-budget.md` | What the providers publish, and what they don't. |
 | `docs/06-speakability-gate.md` | Heard vs speakable, and the three gates. |
 | `docs/07-defect-register.md` | Known defects, with the mechanism for each. |
+| `docs/08-follow-ups.md` | What was deliberately not done, and why. |
+| `CONTRIBUTING.md` | Adding a capability, and the rules that go with it. |
 | `docs/adr/` | Nine decisions, including the ones still Proposed. |
