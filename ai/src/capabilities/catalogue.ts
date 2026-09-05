@@ -5,8 +5,8 @@
  * that always work come first, then the ones a deployment has to configure.
  *
  * ADDING A CAPABILITY IS ADDING A FILE AND A LINE HERE. That is the whole point
- * of ./types.ts — medication reminders, daily check-ins and vitals logging are
- * the next three, and none of them should require editing anybody else's
+ * of ./types.ts — medication reminders, daily check-ins and vitals logging were
+ * the next three, and none of them required editing anybody else's
  * registration code.
  */
 
@@ -16,6 +16,7 @@ import { gamesCapability } from "./games.ts";
 import { wellbeingCapability } from "./wellbeing.ts";
 import { medicationCapability } from "./medication.ts";
 import { checkinCapability } from "./checkin.ts";
+import { vitalsCapability } from "./vitals.ts";
 import { weatherCapability } from "./weather.ts";
 import { newsCapability } from "./news.ts";
 import { musicCapability } from "./music.ts";
@@ -31,6 +32,10 @@ export const CAPABILITIES: readonly Capability[] = [
   // does. It is also the first entry whose tools can act between turns.
   medicationCapability,
   checkinCapability,
+  // After the two that speak on their own and before the external ones. It is
+  // an outbound call like weather and news, but to our own service, about the
+  // person rather than about the world.
+  vitalsCapability,
   weatherCapability,
   newsCapability,
   musicCapability,

@@ -46,8 +46,22 @@ export function externalSummary(
     weather: false,
     news: [],
     ...merged,
-    // Worth saying out loud at boot: the one hop that is not Sarvam and not in
-    // India. See the residency note in shared/src/config/env.ts.
-    residency: opts.weatherEnabled ? "get_weather leaves India (Open-Meteo, EU)" : "all in-India",
+    // Worth saying out loud at boot: every hop that is not Sarvam. See the
+    // residency note in shared/src/config/env.ts.
+    //
+    // THE VITALS HALF IS READ FROM `merged`, not from a config flag, and that
+    // is deliberate. This line used to say "all in-India" whenever the weather
+    // was off — which stopped being true the moment a capability could send a
+    // person's blood pressure to a service at an address nobody here knows. A
+    // capability that reports it registered is the only thing that can be
+    // trusted to mean a hop exists, and reading it that way keeps this file out
+    // of the business of knowing what each capability's config looks like.
+    residency:
+      [
+        opts.weatherEnabled ? "get_weather leaves India (Open-Meteo, EU)" : null,
+        merged["vitals"] ? "vitals go to the safety service, wherever it is deployed" : null,
+      ]
+        .filter((claim) => claim !== null)
+        .join("; ") || "all in-India",
   };
 }

@@ -240,3 +240,29 @@ describe("startEscalationRunner", () => {
     await handle.stop();
   });
 });
+
+describe("what the boot log claims about residency", () => {
+  it("says all in-India when nothing leaves it", () => {
+    const summary = externalSummary([], { weatherEnabled: false });
+    assert.equal(summary["residency"], "all in-India");
+  });
+
+  it("names the vitals hop, because the address is not ours to assume", () => {
+    // The old version said "all in-India" whenever the weather was off, which
+    // stopped being true the moment a capability could send somebody's blood
+    // pressure to a service at an address nobody here knows.
+    const summary = externalSummary(
+      [{ name: "vitals", registered: true, tools: [], detail: { vitals: "log+read" } }],
+      { weatherEnabled: false },
+    );
+    assert.match(String(summary["residency"]), /vitals go to the safety service/);
+  });
+
+  it("names both when both are on", () => {
+    const summary = externalSummary(
+      [{ name: "vitals", registered: true, tools: [], detail: { vitals: "log+read" } }],
+      { weatherEnabled: true },
+    );
+    assert.match(String(summary["residency"]), /Open-Meteo.*vitals go to/s);
+  });
+});

@@ -549,6 +549,49 @@ export function loadConfig() {
       abandonAfterMinutes: num("CHECKIN_ABANDON_MINUTES", 240),
     },
 
+    /**
+     * Vitals — the seam to the safety service, not a store of our own.
+     *
+     * `elderguard-backend/` already owns telemetry: it ingests from the band
+     * over MQTT, from a caregiver's CSV and from the device's own stream, and
+     * it checks every reading against its anomaly bands. A second vitals store
+     * here would mean two records of one person's health that disagree, and a
+     * family reading whichever one their dashboard pointed at. So this is a
+     * base URL and a key, and nothing about a reading is kept in this process.
+     *
+     * ⚠ WHAT THE COMPANION DOES WITH A READING IS: WRITE IT DOWN. It never
+     * says whether one is high, low, normal or worrying — not in a tool result,
+     * not in a log line, not in the family message. The single place a vital
+     * sign is judged is the safety service's bands, and the only thing that
+     * follows from one is the escalation ladder asking how the person is, in
+     * copy a human reviewed. Anything else is a device improvising medical
+     * advice to an eighty-year-old.
+     *
+     * UNSET MEANS THE TOOLS ARE NOT REGISTERED, the usual rule: a companion
+     * that offers to remember your blood sugar and then cannot is worse than
+     * one that never offered.
+     */
+    vitals: {
+      /**
+       * The safety service's API root — `http://localhost:8000/api/v1`.
+       *
+       * IN-COUNTRY BY CONSTRUCTION, unlike the weather hop: this is our own
+       * service, wherever the deployment put it. It carries more than any other
+       * outbound call in this product does — somebody's blood pressure rather
+       * than a city name — so where it points is worth checking against
+       * docs/05-open-questions.md Q14 before pointing it anywhere shared.
+       */
+      apiBase: process.env["VITALS_API_BASE"]?.trim() || null,
+      /** Must equal COMPANION_API_KEY on the safety service. */
+      apiKey: process.env["VITALS_API_KEY"]?.trim() || null,
+      /**
+       * One round trip on what should be a local network. Short, because a
+       * tool call happens inside a turn with a person waiting in real time,
+       * and the right answer to a service that is not responding is to say so.
+       */
+      timeoutMs: num("VITALS_TIMEOUT_MS", 4000),
+    },
+
     /** raise_alarm. Inert unless contacts AND a relay are configured. */
     emergency: {
       /**
