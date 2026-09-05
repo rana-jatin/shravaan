@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import type { HttpFetch } from "@sp-i/shared/providers/http.ts";
 import { RadioCatalogue, type RadioCatalogueDeps } from "../src/domain/radio-catalogue.ts";
 import { createPlayMusic, durationSeconds, pickSongLike } from "../src/tools/music.ts";
 import { ToolRegistry, toSchema, validateArgs } from "../src/tools/registry.ts";
@@ -538,5 +539,75 @@ describe("volume by voice", () => {
       assert.ok((QUIETER_PHRASES[l.code] ?? []).length > 0, `${l.code} quieter`);
       assert.ok((LOUDER_PHRASES[l.code] ?? []).length > 0, `${l.code} louder`);
     }
+  });
+});
+
+describe("overlapping refreshes", () => {
+  it("joins a refresh already running rather than starting a second", async () => {
+    // A full pass is eleven sequential queries against a volunteer directory
+    // measured at ~1.7 s each, so the boot refresh and the first interval tick
+    // genuinely can overlap. Two passes interleaved would double what we ask of
+    // somebody else's server to write the same map twice.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let queries = 0;
+
+    const fetch: HttpFetch = async () => {
+      queries++;
+      await gate;
+      return { ok: true, status: 200, text: async () => JSON.stringify([station()]) };
+    };
+
+    const cat = new RadioCatalogue({
+      apiBase: "https://dir.test",
+      languages: ["hi-IN"],
+      fallbackLanguage: "hi-IN",
+      fetch,
+    });
+
+    const first = cat.refresh();
+    const second = cat.refresh();
+    assert.equal(queries, 1, "the second call started its own pass");
+
+    release();
+    await Promise.all([first, second]);
+    assert.equal(queries, 1);
+  });
+
+  it("lets the next refresh run once the last one has finished", async () => {
+    // A joined caller must not leave the slot held: an interval that could
+    // never refresh again is worse than one that occasionally doubles up.
+    const dir = stubDirectory({ hindi: [station()] });
+    const cat = new RadioCatalogue({
+      apiBase: "https://dir.test",
+      languages: ["hi-IN"],
+      fallbackLanguage: "hi-IN",
+      fetch: dir.fetch,
+    });
+
+    await cat.refresh();
+    await cat.refresh();
+    assert.equal(dir.urls.length, 2);
+  });
+
+  it("releases the slot when a pass fails", async () => {
+    // `#refresh` swallows per-language failures, so reaching this needs the
+    // whole pass to throw. Whatever the cause, a failed refresh must not wedge
+    // the catalogue into never trying again.
+    let attempts = 0;
+    const fetch: HttpFetch = async () => {
+      attempts++;
+      throw new Error("directory unreachable");
+    };
+    const cat = new RadioCatalogue({
+      apiBase: "https://dir.test",
+      languages: ["hi-IN"],
+      fallbackLanguage: "hi-IN",
+      fetch,
+    });
+
+    await cat.refresh();
+    await cat.refresh();
+    assert.equal(attempts, 2);
   });
 });

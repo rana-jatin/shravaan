@@ -65,8 +65,17 @@ export const newsCapability: Capability = {
       return { name: "news", registered: false, tools: [], detail: { news: [] } };
     }
 
-    const spec = createGetNews({ feeds, limit: cfg.news.headlineLimit });
+    const spec = createGetNews({
+      feeds,
+      limit: cfg.news.headlineLimit,
+      cacheMs: cfg.news.cacheSeconds * 1000,
+    });
     registry.register(spec);
-    return { name: "news", registered: true, tools: [spec.name], detail: { news: categories } };
+    return {
+      name: "news",
+      registered: true,
+      tools: [spec.name],
+      detail: { news: categories },
+    };
   },
 };

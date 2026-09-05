@@ -22,6 +22,8 @@ export const weatherCapability: Capability = {
       defaultPlace: cfg.weather.defaultPlace,
       countryBias: cfg.weather.countryBias,
       pincodeApiBase: cfg.weather.pincodeApiBase,
+      geocodeCacheMs: cfg.weather.geocodeCacheHours * 60 * 60_000,
+      forecastCacheMs: cfg.weather.forecastCacheSeconds * 1000,
     });
     registry.register(spec);
     return { name: "weather", registered: true, tools: [spec.name], detail: { weather: true } };

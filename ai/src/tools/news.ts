@@ -6,6 +6,7 @@
  */
 
 import { getText, nodeFetch, type HttpFetch } from "@sp-i/shared/providers/http.ts";
+import { TtlCache } from "../domain/ttl-cache.ts";
 import type { ToolSpec } from "./registry.ts";
 import { NETWORK_FILLER_MS, NETWORK_MS } from "./external.ts";
 
@@ -17,13 +18,29 @@ import { NETWORK_FILLER_MS, NETWORK_MS } from "./external.ts";
 export const NEWS_CATEGORIES = ["top", "sports", "business", "world", "entertainment"] as const;
 export type NewsCategory = (typeof NEWS_CATEGORIES)[number];
 
+/** See `NewsDeps.cacheMs` for why five minutes. */
+const DEFAULT_CACHE_MS = 5 * 60_000;
+
 export type NewsDeps = {
   /** Category → RSS URL. Only the configured categories are offered. */
   feeds: Partial<Record<NewsCategory, string>>;
   /** Headlines per answer. Small on purpose — this is read aloud. */
   limit?: number;
+  /**
+   * How long a feed's headlines stay fresh. Zero disables caching.
+   *
+   * Five minutes by default, and the number comes from what news IS rather
+   * than from load. A wire service publishes a few times an hour; nobody asking
+   * a companion what is happening is served better by a headline five minutes
+   * newer, and refetching per question would hit the same feed once for every
+   * conversation in the house every time somebody asked.
+   */
+  cacheMs?: number;
   fetch?: HttpFetch;
+  now?: () => number;
 };
+
+type Headline = { title: string; published: string | null };
 
 const ENTITIES: Record<string, string> = {
   "&amp;": "&",
@@ -83,6 +100,15 @@ export function createGetNews(deps: NewsDeps): ToolSpec {
   const limit = deps.limit ?? 5;
   const available = NEWS_CATEGORIES.filter((c) => deps.feeds[c]);
 
+  // Keyed by URL rather than by category, so two categories pointed at the same
+  // feed share one fetch — which is what an operator who set `top` and `world`
+  // to the same wire service has actually asked for.
+  const cache = new TtlCache<Headline[]>({
+    ttlMs: deps.cacheMs ?? DEFAULT_CACHE_MS,
+    maxEntries: NEWS_CATEGORIES.length,
+    ...(deps.now ? { now: deps.now } : {}),
+  });
+
   return {
     name: "get_news",
     description:
@@ -107,7 +133,7 @@ export function createGetNews(deps: NewsDeps): ToolSpec {
     deadline_ms: NETWORK_MS,
     filler_threshold_ms: NETWORK_FILLER_MS,
     progress_key: "progress.news",
-    handler: async (args, ctx) => {
+    handler: async (args) => {
       const category = String(args["category"] ?? "").trim() as NewsCategory;
       const url = deps.feeds[category];
       // Domain outcome again: the model offers what IS available rather than
@@ -116,12 +142,21 @@ export function createGetNews(deps: NewsDeps): ToolSpec {
         return { found: 0, reason: "category_unavailable", category, available };
       }
 
-      const xml = await getText(fetcher, url, "news feed", {
-        signal: ctx.signal,
-        headers: { accept: "application/rss+xml, application/xml, text/xml" },
-      });
-
-      const headlines = parseFeedTitles(xml, limit);
+      // THE PARSE IS INSIDE THE CACHED LOAD, not outside it. Storing the raw
+      // XML would mean every hit re-running six regexes over a document that
+      // can be a hundred kilobytes, inside a turn, to produce the same five
+      // strings it produced a minute ago.
+      //
+      // ⚠ `ctx.signal` belongs to ONE turn, and a shared load may outlive it —
+      // the second caller would lose its answer because the first one hung up.
+      // The tool's own deadline still bounds every waiter, so nothing here can
+      // hold a turn open; what is given up is cancelling the upstream request,
+      // which is a request already made.
+      const headlines = await cache.fetch(url, () =>
+        getText(fetcher, url, "news feed", {
+          headers: { accept: "application/rss+xml, application/xml, text/xml" },
+        }).then((xml) => parseFeedTitles(xml, limit)),
+      );
       return headlines.length === 0
         ? { found: 0, reason: "feed_empty", category }
         : { found: headlines.length, category, headlines };

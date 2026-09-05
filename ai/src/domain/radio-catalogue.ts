@@ -97,6 +97,8 @@ export class RadioCatalogue {
   readonly #perLanguage: number;
   readonly #stations = new Map<LanguageCode, Station[]>();
   #refreshedAt: number | null = null;
+  /** The pass in flight, if any. See `refresh`. */
+  #refreshing: Promise<void> | null = null;
 
   constructor(deps: RadioCatalogueDeps) {
     this.#d = deps;
@@ -118,8 +120,30 @@ export class RadioCatalogue {
    * One language failing must not empty the others, so each is caught
    * independently and the previous list is kept on error — a stale station is
    * far better than silence.
+   *
+   * SINGLE-FLIGHT: a call made while one is running joins it rather than
+   * starting a second. A full refresh is eleven sequential queries against a
+   * volunteer directory measured at ~1.7 s each, so a pass takes the better
+   * part of twenty seconds — long enough for the boot refresh and the first
+   * interval to overlap on any deployment whose refresh window is short, and
+   * long enough that a slow directory makes every subsequent tick pile up on
+   * the last. Two passes interleaved would double what we ask of somebody
+   * else's server to write the same map twice.
+   *
+   * ⚠ THE JOINED CALLER GETS THE FIRST CALL'S `signal`, not its own. That is
+   * the honest consequence of sharing the work and it costs nothing here: the
+   * only caller that passes one is a shutdown, and abandoning a refresh early
+   * leaves the previous stations in place, which is what a failure does anyway.
    */
-  async refresh(signal?: AbortSignal): Promise<void> {
+  refresh(signal?: AbortSignal): Promise<void> {
+    if (this.#refreshing) return this.#refreshing;
+    const pass = this.#refresh(signal);
+    this.#refreshing = pass;
+    void pass.finally(() => (this.#refreshing = null)).catch(() => {});
+    return pass;
+  }
+
+  async #refresh(signal?: AbortSignal): Promise<void> {
     const fetcher = this.#d.fetch ?? nodeFetch();
 
     for (const language of this.#d.languages) {

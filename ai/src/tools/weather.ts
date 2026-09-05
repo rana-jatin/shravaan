@@ -7,6 +7,7 @@
  */
 
 import { getJson, nodeFetch, type HttpFetch } from "@sp-i/shared/providers/http.ts";
+import { TtlCache } from "../domain/ttl-cache.ts";
 import type { ToolSpec } from "./registry.ts";
 import { NETWORK_FILLER_MS, NETWORK_MS } from "./external.ts";
 
@@ -119,8 +120,61 @@ export type WeatherDeps = {
    * It is the geocoding and forecast hops that do.
    */
   pincodeApiBase: string | null;
+  /**
+   * How long a resolved place keeps its coordinates. Zero disables caching.
+   *
+   * A DAY, AND IT COULD HONESTLY BE LONGER. Pune's latitude does not change,
+   * and neither does the district a PIN code sits in. The only reason it is not
+   * permanent is that a cache with no expiry is one nobody can fix without a
+   * restart — and the rename table above exists precisely because a geocoder's
+   * answer for an Indian city name is a thing that HAS changed.
+   *
+   * This is the hop worth caching hardest: two round trips, and the one that
+   * repeats most, because the same few places are asked about all day.
+   */
+  geocodeCacheMs?: number;
+  /**
+   * How long a forecast stays fresh. Zero disables caching.
+   *
+   * Ten minutes. Open-Meteo publishes on a fifteen-minute cadence, so a shorter
+   * window buys the same numbers at more cost; a longer one risks a companion
+   * saying it is dry through the first ten minutes of rain.
+   */
+  forecastCacheMs?: number;
   fetch?: HttpFetch;
+  now?: () => number;
 };
+
+const DEFAULT_GEOCODE_CACHE_MS = 24 * 60 * 60_000;
+const DEFAULT_FORECAST_CACHE_MS = 10 * 60_000;
+
+type Forecast = { current?: Record<string, number>; daily?: Record<string, unknown[]> };
+
+/**
+ * A geocoder hit that actually carries coordinates.
+ *
+ * Every field on `GeocodeHit` is optional because the upstream's are, and the
+ * latitude check used to live at the one call site that needed it. Now that a
+ * hit is stored and read back, the guarantee has to travel with the value —
+ * otherwise the check happens on the way in and is re-litigated on the way out.
+ */
+type ResolvedPlace = GeocodeHit & { latitude: number; longitude: number };
+
+/**
+ * A place the geocoder genuinely has no entry for.
+ *
+ * A SENTINEL RATHER THAN A `null` RETURN, because the lookup now happens inside
+ * a cached load and the cache stores what the loader returns. Returning null
+ * would file "we could not find it" as the answer for a day; throwing keeps the
+ * miss out of the cache while still letting the caller turn it into the domain
+ * outcome the model needs.
+ */
+class UnknownPlace extends Error {
+  constructor(place: string) {
+    super(`no geocoding result for ${place}`);
+    this.name = "UnknownPlace";
+  }
+}
 
 type GeocodeHit = {
   name?: string;
@@ -133,6 +187,24 @@ type GeocodeHit = {
 
 export function createGetWeather(deps: WeatherDeps): ToolSpec {
   const fetcher = deps.fetch ?? nodeFetch();
+  const clock = deps.now ? { now: deps.now } : {};
+
+  // THREE CACHES, NOT ONE, because the three answers go stale at completely
+  // different rates: a coordinate effectively never, a forecast in minutes.
+  // One shared lifetime would mean either re-geocoding Pune every ten minutes
+  // or telling somebody it is dry a day after it started raining.
+  const geocodeCache = new TtlCache<ResolvedPlace>({
+    ttlMs: deps.geocodeCacheMs ?? DEFAULT_GEOCODE_CACHE_MS,
+    ...clock,
+  });
+  const pincodeCache = new TtlCache<string>({
+    ttlMs: deps.geocodeCacheMs ?? DEFAULT_GEOCODE_CACHE_MS,
+    ...clock,
+  });
+  const forecastCache = new TtlCache<Forecast>({
+    ttlMs: deps.forecastCacheMs ?? DEFAULT_FORECAST_CACHE_MS,
+    ...clock,
+  });
 
   /** Old name → current name, so the geocoder can find it at all. */
   const dealias = (place: string): string => PLACE_ALIASES[place.toLowerCase()] ?? place;
@@ -144,37 +216,65 @@ export function createGetWeather(deps: WeatherDeps): ToolSpec {
    * a domain outcome, and a pincode service being down must not take the whole
    * tool with it when the caller could still have meant a place name.
    */
-  async function resolvePincode(code: string, signal: AbortSignal): Promise<string | null> {
+  async function resolvePincode(code: string): Promise<string | null> {
     if (!deps.pincodeApiBase) return null;
     try {
-      const body = await getJson<
-        Array<{ Status?: string; PostOffice?: Array<{ District?: string; State?: string }> }>
-      >(fetcher, `${deps.pincodeApiBase}/pincode/${encodeURIComponent(code)}`, "pincode lookup", {
-        signal,
-      });
+      // ⚠ ONLY A RESOLUTION IS CACHED. A pincode service having a bad minute
+      // and a pincode nobody has heard of are the same value from here, and
+      // remembering the first for a day would turn one blip into an address
+      // this device cannot find until it restarts.
+      return await pincodeCache.fetch(code, async () => {
+        const body = await getJson<
+          Array<{ Status?: string; PostOffice?: Array<{ District?: string; State?: string }> }>
+        >(fetcher, `${deps.pincodeApiBase}/pincode/${encodeURIComponent(code)}`, "pincode lookup");
 
-      const office = body?.[0]?.PostOffice?.[0];
-      if (body?.[0]?.Status !== "Success" || !office?.District) return null;
-      // India Post still returns the PRE-RENAME district ("Allahabad"), so this
-      // has to run through the alias table too — which is the whole reason the
-      // pincode path was not enough on its own.
-      return dealias(office.District);
+        const office = body?.[0]?.PostOffice?.[0];
+        if (body?.[0]?.Status !== "Success" || !office?.District) {
+          throw new UnknownPlace(code);
+        }
+        // India Post still returns the PRE-RENAME district ("Allahabad"), so
+        // this has to run through the alias table too — which is the whole
+        // reason the pincode path was not enough on its own.
+        return dealias(office.District);
+      });
     } catch {
       return null;
     }
   }
 
   /** Biased query first, unbiased retry second. See `countryBias`. */
-  async function geocode(place: string, signal: AbortSignal): Promise<GeocodeHit | null> {
-    const base = `${deps.geocodeBase}/v1/search?name=${encodeURIComponent(place)}&count=1&language=en&format=json`;
-    const queries = deps.countryBias ? [`${base}&countryCode=${deps.countryBias}`, base] : [base];
+  async function geocode(place: string): Promise<ResolvedPlace | null> {
+    // Lowercased, so "PUNE", "Pune" and "pune" are one entry rather than three.
+    // The bias is part of the key because it changes the answer: "London" with
+    // an India bias and without it are different places.
+    const key = `${place.toLowerCase()}|${deps.countryBias ?? ""}`;
+    try {
+      // ⚠ A MISS IS NOT CACHED, the same rule as the pincode above. An empty
+      // result means "no such place" or "the index is rebuilding" and nothing
+      // here can tell those apart, so a name that failed once is retried.
+      return await geocodeCache.fetch(key, async () => {
+        const base = `${deps.geocodeBase}/v1/search?name=${encodeURIComponent(place)}&count=1&language=en&format=json`;
+        const queries = deps.countryBias
+          ? [`${base}&countryCode=${deps.countryBias}`, base]
+          : [base];
 
-    for (const url of queries) {
-      const geo = await getJson<{ results?: GeocodeHit[] }>(fetcher, url, "geocoding", { signal });
-      const hit = geo.results?.[0];
-      if (hit && typeof hit.latitude === "number" && typeof hit.longitude === "number") return hit;
+        for (const url of queries) {
+          const geo = await getJson<{ results?: GeocodeHit[] }>(fetcher, url, "geocoding");
+          const hit = geo.results?.[0];
+          if (hit && typeof hit.latitude === "number" && typeof hit.longitude === "number") {
+            return { ...hit, latitude: hit.latitude, longitude: hit.longitude };
+          }
+        }
+        throw new UnknownPlace(place);
+      });
+    } catch (err) {
+      // ONLY OUR SENTINEL BECOMES A DOMAIN OUTCOME. A geocoder that answered
+      // 503 is infrastructure and still throws, so the model speaks the
+      // reviewed "something went wrong" copy rather than "I couldn't find that
+      // place" — which would be a confident wrong answer about a real place.
+      if (err instanceof UnknownPlace) return null;
+      throw err;
     }
-    return null;
   }
 
   return {
@@ -202,37 +302,46 @@ export function createGetWeather(deps: WeatherDeps): ToolSpec {
     deadline_ms: NETWORK_MS,
     filler_threshold_ms: NETWORK_FILLER_MS,
     progress_key: "progress.weather",
-    handler: async (args, ctx) => {
+    handler: async (args) => {
       const asked = String(args["place"] ?? "").trim() || deps.defaultPlace || "";
       if (asked === "") return { found: false, reason: "no_place_given" };
 
       // A pincode resolves to a district; anything else goes through the alias
       // table. Both land on a name the geocoder actually indexes.
-      const resolved = PINCODE.test(asked)
-        ? await resolvePincode(asked, ctx.signal)
-        : dealias(asked);
+      const resolved = PINCODE.test(asked) ? await resolvePincode(asked) : dealias(asked);
 
       if (resolved === null) {
         return { found: false, reason: "unknown_pincode", place: asked };
       }
 
-      const hit = await geocode(resolved, ctx.signal);
+      const hit = await geocode(resolved);
       // A place we cannot find is a DOMAIN outcome, not a failure. The model says
       // "I couldn't find that place" in the user's own language, for free — where
       // an error result would cost eleven translations. See the file header.
       if (!hit) return { found: false, reason: "unknown_place", place: asked };
 
-      const wx = await getJson<{
-        current?: Record<string, number>;
-        daily?: Record<string, unknown[]>;
-      }>(
-        fetcher,
-        `${deps.apiBase}/v1/forecast?latitude=${hit.latitude}&longitude=${hit.longitude}` +
-          `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m` +
-          `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
-          `&timezone=auto&forecast_days=1`,
-        "forecast",
-        { signal: ctx.signal },
+      // Keyed to two decimal places — about a kilometre. Neighbouring suburbs
+      // share an entry because they share the weather, and the coordinates a
+      // geocoder returns for one city name are identical anyway; the rounding
+      // is what makes that true across two different names for one place.
+      //
+      // ⚠ THE TURN'S ABORT SIGNAL IS DELIBERATELY NOT PASSED into any of these
+      // loads, and this handler no longer takes a `ctx` at all. A shared load
+      // can outlive the turn that started it, so cancelling on the first
+      // caller's hang-up would take the answer away from the second — which is
+      // the whole point of sharing it. The tool's own deadline still bounds
+      // every waiter, so nothing here can hold a turn open; what the request
+      // itself is bounded by is the fetch timeout, not the turn.
+      const key = `${hit.latitude.toFixed(2)},${hit.longitude.toFixed(2)}`;
+      const wx = await forecastCache.fetch(key, () =>
+        getJson<Forecast>(
+          fetcher,
+          `${deps.apiBase}/v1/forecast?latitude=${hit.latitude}&longitude=${hit.longitude}` +
+            `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m` +
+            `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+            `&timezone=auto&forecast_days=1`,
+          "forecast",
+        ),
       );
 
       const cur = wx.current ?? {};

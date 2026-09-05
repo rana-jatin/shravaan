@@ -610,3 +610,169 @@ describe("a truncated feed URL is refused, not fetched", () => {
     assert.equal(isHttpUrl("ftp://x.test/rss"), false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Caching
+// ---------------------------------------------------------------------------
+
+describe("what these tools stop asking for twice", () => {
+  // A local copy: the RSS fixture above is scoped to its own describe block,
+  // and reaching into it would couple two suites that have nothing to do with
+  // each other.
+  const FEED = `<?xml version="1.0"?><rss><channel>
+    <item><title>Monsoon reaches the coast</title><pubDate>Mon, 01 Sep 2026 06:00:00 GMT</pubDate></item>
+    <item><title>Metro line opens</title></item>
+  </channel></rss>`;
+
+  it("geocodes a place once and forecasts it again", async () => {
+    // The two hops have completely different lifetimes and this is what that
+    // buys: a second question about the same city half an hour later re-reads
+    // the weather without re-asking where the city is.
+    let clock = 0;
+    const fetch = stubFetch([
+      { match: "geo.test", body: GEO_OK },
+      { match: "wx.test", body: FORECAST_OK },
+    ]);
+    const tool = weather(fetch, null, { now: () => clock });
+
+    await tool.handler({ place: "Bengaluru" }, invocation());
+    clock = 20 * 60_000; // past the forecast window, nowhere near the geocode one
+    await tool.handler({ place: "Bengaluru" }, invocation());
+
+    assert.equal(fetch.urls.filter((u) => u.includes("geo.test")).length, 1);
+    assert.equal(fetch.urls.filter((u) => u.includes("wx.test")).length, 2);
+  });
+
+  it("asks upstream nothing at all for a repeated question", async () => {
+    const fetch = stubFetch([
+      { match: "geo.test", body: GEO_OK },
+      { match: "wx.test", body: FORECAST_OK },
+    ]);
+    const tool = weather(fetch, null, { now: () => 0 });
+
+    await tool.handler({ place: "Bengaluru" }, invocation());
+    const after = fetch.urls.length;
+    const out = await tool.handler({ place: "Bengaluru" }, invocation());
+
+    assert.equal(fetch.urls.length, after);
+    assert.equal(out["found"], true);
+    assert.equal(out["temperature_c"], 31);
+  });
+
+  it("treats one place said three ways as one place", async () => {
+    // Case-insensitive, and through the rename table: "BANGALORE", "bangalore"
+    // and "Bengaluru" are the same city and the same coordinates.
+    const fetch = stubFetch([
+      { match: "geo.test", body: GEO_OK },
+      { match: "wx.test", body: FORECAST_OK },
+    ]);
+    const tool = weather(fetch, null, { now: () => 0 });
+
+    for (const place of ["Bengaluru", "BENGALURU", "bangalore"]) {
+      assert.equal((await tool.handler({ place }, invocation()))["found"], true);
+    }
+    assert.equal(fetch.urls.filter((u) => u.includes("geo.test")).length, 1);
+  });
+
+  it("does not remember a place it could not find", async () => {
+    // A geocoder returning nothing means "no such place" or "the index is
+    // rebuilding", and nothing here can tell those apart. Filing the first
+    // answer for a day would make one bad minute a permanent gap.
+    const fetch = stubFetch([{ match: "geo.test", body: JSON.stringify({ results: [] }) }]);
+    const tool = weather(fetch, null, { now: () => 0 });
+
+    assert.equal((await tool.handler({ place: "Nowhere" }, invocation()))["found"], false);
+    assert.equal((await tool.handler({ place: "Nowhere" }, invocation()))["found"], false);
+    assert.equal(fetch.urls.length, 2);
+  });
+
+  it("still throws on a geocoder that is down, rather than saying no such place", async () => {
+    // The distinction the cache had to preserve: a 503 is infrastructure and
+    // must reach the reviewed `tool.unavailable` copy. Saying "I couldn't find
+    // that place" about a place that exists is a confident wrong answer.
+    const fetch = stubFetch([{ match: "geo.test", status: 503, body: "upstream down" }]);
+    await assert.rejects(
+      () => weather(fetch, null, { now: () => 0 }).handler({ place: "Pune" }, invocation()),
+      /HTTP 503/,
+    );
+  });
+
+  it("fetches a feed once for two questions inside the window", async () => {
+    let clock = 0;
+    const fetch = stubFetch([{ match: "feed.test", body: FEED }]);
+    const tool = createGetNews({
+      feeds: { top: "https://feed.test/top.rss" },
+      fetch,
+      now: () => clock,
+    });
+
+    await tool.handler({ category: "top" }, invocation());
+    clock = 4 * 60_000;
+    const out = await tool.handler({ category: "top" }, invocation());
+
+    assert.equal(fetch.urls.length, 1);
+    assert.ok(Number(out["found"]) > 0);
+
+    clock = 5 * 60_000;
+    await tool.handler({ category: "top" }, invocation());
+    assert.equal(fetch.urls.length, 2);
+  });
+
+  it("shares one fetch between two categories pointed at the same feed", async () => {
+    // Keyed by URL, not by category — which is what an operator who set `top`
+    // and `world` to the same wire service has actually asked for.
+    const fetch = stubFetch([{ match: "feed.test", body: FEED }]);
+    const tool = createGetNews({
+      feeds: { top: "https://feed.test/all.rss", world: "https://feed.test/all.rss" },
+      fetch,
+      now: () => 0,
+    });
+
+    await tool.handler({ category: "top" }, invocation());
+    await tool.handler({ category: "world" }, invocation());
+    assert.equal(fetch.urls.length, 1);
+  });
+
+  it("makes one request when three conversations ask at once", async () => {
+    // The morning in a house with two devices. All three arrive before the
+    // first response lands, so a cache checked only on entry misses all three.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const fetch: HttpFetch = async () => {
+      calls++;
+      await gate;
+      return { ok: true, status: 200, text: async () => FEED };
+    };
+    const tool = createGetNews({
+      feeds: { top: "https://feed.test/top.rss" },
+      fetch,
+      now: () => 0,
+    });
+
+    const asks = Promise.all([
+      tool.handler({ category: "top" }, invocation()),
+      tool.handler({ category: "top" }, invocation()),
+      tool.handler({ category: "top" }, invocation()),
+    ]);
+    release();
+    const results = await asks;
+
+    assert.equal(calls, 1);
+    for (const out of results) assert.ok(Number(out["found"]) > 0);
+  });
+
+  it("caches nothing when the window is zero", async () => {
+    // NEWS_CACHE_SECONDS=0, the switch for somebody chasing a stale headline.
+    const fetch = stubFetch([{ match: "feed.test", body: FEED }]);
+    const tool = createGetNews({
+      feeds: { top: "https://feed.test/top.rss" },
+      fetch,
+      cacheMs: 0,
+    });
+
+    await tool.handler({ category: "top" }, invocation());
+    await tool.handler({ category: "top" }, invocation());
+    assert.equal(fetch.urls.length, 2);
+  });
+});

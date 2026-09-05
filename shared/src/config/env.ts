@@ -299,6 +299,23 @@ export function loadConfig() {
        * likely to be phrased as a number never leaves the country.
        */
       pincodeApiBase: opt("WEATHER_PINCODE_API", "https://api.postalpincode.in") || null,
+      /**
+       * How long a resolved place keeps its coordinates, in hours. 0 disables.
+       *
+       * A day, because Pune's latitude does not change and neither does the
+       * district a PIN code sits in. It is the hop worth caching hardest: two
+       * round trips, and the one that repeats most, since the same few places
+       * are asked about all day.
+       */
+      geocodeCacheHours: num("WEATHER_GEOCODE_CACHE_HOURS", 24),
+      /**
+       * How long a forecast stays fresh, in seconds. 0 disables.
+       *
+       * Ten minutes: Open-Meteo publishes on a fifteen-minute cadence, so less
+       * buys the same numbers at more cost, and more risks a companion saying
+       * it is dry through the first ten minutes of rain.
+       */
+      forecastCacheSeconds: num("WEATHER_FORECAST_CACHE_SECONDS", 600),
     },
 
     /** get_news. Feeds are per deployment; unconfigured is unregistered. */
@@ -330,6 +347,17 @@ export function loadConfig() {
        */
       feedsDropped: news.dropped,
       headlineLimit: num("NEWS_HEADLINE_LIMIT", 5),
+      /**
+       * How long a feed's headlines stay fresh, in seconds. 0 disables.
+       *
+       * Five minutes, and the number comes from what news IS rather than from
+       * load. A wire service publishes a few times an hour; nobody asking a
+       * companion what is happening is better served by a headline five minutes
+       * newer. Without it the same feed is fetched once per question, per
+       * conversation — and a house with two devices asking at breakfast is the
+       * ordinary case, not the busy one.
+       */
+      cacheSeconds: num("NEWS_CACHE_SECONDS", 300),
     },
 
     /** play_music. Live radio always; YouTube only with a key. */
