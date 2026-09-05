@@ -46,6 +46,7 @@ def create_app() -> FastAPI:
             {"name": "Devices", "description": "Hardware pairing and heartbeat management."},
             {"name": "Telemetry", "description": "High-frequency vital telemetry ingestion."},
             {"name": "Emergency Alerts", "description": "SOS creation and escalation."},
+            {"name": "Companion", "description": "The voice companion's seam: self-reported vitals, open alerts, and session context."},
         ],
         lifespan=lifespan,
     )

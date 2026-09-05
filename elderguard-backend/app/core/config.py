@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     #: of range a quarter of an hour later is worth raising again, and one
     #: that is out of range for six consecutive readings is not six events.
     anomaly_cooldown_minutes: int = Field(default=15, ge=1, le=1440)
+    #: Shared secret the companion server presents on /api/v1/companion/*.
+    #:
+    #: A KEY RATHER THAN A JWT, unlike every other caller here, and the reason
+    #: is what the caller is. A device token names one device and a user token
+    #: names one person; the companion acts for whoever is talking to it, so
+    #: neither shape fits. This is service-to-service between two halves of one
+    #: product, and a static secret in both environments is the honest way to
+    #: say that rather than inventing a third token type to dress it up.
+    #:
+    #: ⚠ UNSET MEANS THE ROUTES REFUSE, NOT THAT THEY ARE OPEN. See
+    #: `require_companion` in api/deps.py — a missing key is a 503 naming the
+    #: variable, never a fall-through to no authentication at all.
+    companion_api_key: str | None = None
     mqtt_enabled: bool = False
     mqtt_broker_host: str = "localhost"
     mqtt_broker_port: int = 1883

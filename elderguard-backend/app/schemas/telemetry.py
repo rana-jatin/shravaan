@@ -20,6 +20,27 @@ METRIC_FIELDS = (
 )
 
 
+def check_blood_pressure(systolic: float | None, diastolic: float | None) -> None:
+    """
+    Blood pressure is a pair or it is nothing. Raises, or says nothing.
+
+    A lone systolic is not half a reading, it is an unreadable one: nobody can
+    act on "140 over —", and the anomaly bands would score it as though the
+    missing half were fine.
+
+    A FUNCTION RATHER THAN A VALIDATOR ON ONE MODEL, because two schemas carry
+    a blood pressure — this one and the companion's — and the outer one was
+    written without this rule. A lone systolic then passed the door and raised
+    a pydantic error while building the inner model, which reaches the caller
+    as a 500 rather than as the 422 that says what was wrong. Any boundary
+    accepting these two fields calls this.
+    """
+    if (systolic is None) != (diastolic is None):
+        raise ValueError("blood pressure needs both systolic and diastolic")
+    if systolic is not None and diastolic is not None and diastolic >= systolic:
+        raise ValueError("systolic must be higher than diastolic")
+
+
 class TelemetryPoint(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     recorded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -48,18 +69,7 @@ class TelemetryPoint(BaseModel):
 
     @model_validator(mode="after")
     def require_both_pressures(self) -> "TelemetryPoint":
-        """
-        Blood pressure is a pair or it is nothing.
-
-        A lone systolic is not half a reading, it is an unreadable one: nobody
-        can act on "140 over —", and the anomaly bands would score it as though
-        the missing half were fine. This is the one place where a partial
-        reading is worth refusing rather than storing.
-        """
-        if (self.systolic_mmhg is None) != (self.diastolic_mmhg is None):
-            raise ValueError("blood pressure needs both systolic and diastolic")
-        if self.systolic_mmhg is not None and self.diastolic_mmhg is not None and self.diastolic_mmhg >= self.systolic_mmhg:
-            raise ValueError("systolic must be higher than diastolic")
+        check_blood_pressure(self.systolic_mmhg, self.diastolic_mmhg)
         return self
 
 

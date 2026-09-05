@@ -26,6 +26,10 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-of-sufficient-leng
 os.environ.setdefault("MQTT_ENABLED", "false")
 os.environ.setdefault("RELATIVE_EMAILS", "")
 os.environ.setdefault("SMTP_HOST", "")
+# Set here rather than per test: `Settings` is built once at import and the
+# companion routes refuse with 503 when this is missing, so a suite that set
+# it later would be testing the unconfigured path everywhere by accident.
+os.environ.setdefault("COMPANION_API_KEY", "test-companion-key")
 
 from collections.abc import AsyncGenerator  # noqa: E402
 from typing import Any  # noqa: E402
