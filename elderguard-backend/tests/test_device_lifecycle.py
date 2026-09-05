@@ -105,11 +105,20 @@ async def test_check_in_records_a_heartbeat(
 async def test_another_user_cannot_read_your_device(
     client: AsyncClient, paired_device: dict[str, Any]
 ) -> None:
-    stranger = await client.post(
+    await client.post(
         "/api/v1/auth/provision",
-        json={"email": "stranger@example.com", "full_name": "Stranger", "role": "relative"},
+        json={
+            "email": "stranger@example.com",
+            "full_name": "Stranger",
+            "role": "relative",
+            "password": "another-long-enough-password",
+        },
     )
-    headers = {"X-User-ID": stranger.json()["id"]}
+    signed_in = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "stranger@example.com", "password": "another-long-enough-password"},
+    )
+    headers = {"Authorization": f"Bearer {signed_in.json()['access_token']}"}
 
     response = await client.get(f"/api/v1/devices/{paired_device['id']}", headers=headers)
     assert response.status_code == 404

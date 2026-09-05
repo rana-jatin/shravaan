@@ -20,6 +20,10 @@ class User(Base):
     id: Mapped[UUID] = mapped_column(GUID(), primary_key=True, default=uuid4)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(200))
+    # Nullable so rows created before passwords existed survive the migration.
+    # `verify_password` treats a null hash as a failed login, so those accounts
+    # cannot be signed into until someone sets one.
+    password_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, name="user_role", values_callable=lambda enum: [item.value for item in enum]),
         default=UserRole.ELDER,

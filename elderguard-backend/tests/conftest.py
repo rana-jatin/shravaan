@@ -71,6 +71,25 @@ class FakeRedis:
         return self.values.get(key)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def cheap_password_hashing() -> Any:
+    """
+    bcrypt at its production cost, run per test, turns this suite from one
+    second into eleven — and a suite that is slow stops being run, which is the
+    failure step one of this refactor existed to fix.
+
+    The cost factor is lowered for tests ONLY. Everything else about the hash
+    is real: same algorithm, same salting, same verification path, so
+    `test_passwords_are_hashed_not_stored` still means what it says.
+    """
+    import bcrypt
+
+    real_gensalt = bcrypt.gensalt
+    bcrypt.gensalt = lambda rounds=4, prefix=b"2b": real_gensalt(4, prefix)
+    yield
+    bcrypt.gensalt = real_gensalt
+
+
 @pytest_asyncio.fixture
 async def db_sessionmaker() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
     """
@@ -130,16 +149,41 @@ async def client(
     app.dependency_overrides.clear()
 
 
+PASSWORD = "a-sufficiently-long-test-password"
+
+
 @pytest_asyncio.fixture
 async def user(client: AsyncClient) -> dict[str, Any]:
-    """A provisioned user, and the header that currently identifies them."""
-    response = await client.post(
+    """
+    A provisioned user, signed in.
+
+    `headers` used to be `{"X-User-ID": ...}` — which was the whole of this
+    service's user authentication, and is now a real bearer token.
+    """
+    email = "relative@example.com"
+    created = await client.post(
         "/api/v1/auth/provision",
-        json={"email": "relative@example.com", "full_name": "A Relative", "role": "relative"},
+        json={
+            "email": email,
+            "full_name": "A Relative",
+            "role": "relative",
+            "password": PASSWORD,
+        },
     )
-    assert response.status_code == 201, response.text
-    body = response.json()
-    return {"id": body["id"], "headers": {"X-User-ID": body["id"]}}
+    assert created.status_code == 201, created.text
+
+    signed_in = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert signed_in.status_code == 200, signed_in.text
+    token = signed_in.json()["access_token"]
+
+    return {
+        "id": created.json()["id"],
+        "email": email,
+        "token": token,
+        "headers": {"Authorization": f"Bearer {token}"},
+    }
 
 
 @pytest_asyncio.fixture
