@@ -41,13 +41,36 @@ export type EscalationHandler = {
   /**
    * Try to say it. `spoken: false` is expected and ordinary — somebody is
    * mid-sentence, the radio is on, the device is unplugged.
+   *
+   * `payload` is merged into the record when the utterance lands. It exists for
+   * a capability that learns something WHILE speaking which it will need later
+   * and cannot recompute: the daily check-in marks which conversation it asked
+   * in and at which turn, because "did they answer" is a question about that
+   * exact moment. Nothing else can capture it — the runner writes the record
+   * from the pre-speak copy, so a handler writing to the store itself would be
+   * overwritten a line later.
    */
   speak(
     escalation: Escalation,
     stage: "reminded" | "nudged",
-  ): Promise<{ spoken: boolean; reason?: string }>;
+  ): Promise<{ spoken: boolean; reason?: string; payload?: Record<string, unknown> }>;
+
   /** Tell somebody else. */
   notify(escalation: Escalation): Promise<{ delivered: boolean; reason?: string }>;
+
+  /**
+   * Has this answered itself since the last sweep?
+   *
+   * OPTIONAL, AND THE TWO CAPABILITIES THAT USE THIS DIFFER ON IT COMPLETELY.
+   * A medication reminder is acknowledged by an explicit act — the model calls
+   * `confirm_medication` because the person said they took it — so medication
+   * does not implement this at all. A check-in is acknowledged by the person
+   * SAYING ANYTHING, which no tool call can represent, so it is polled here.
+   *
+   * Checked before the clock on every sweep, so a person who answered is never
+   * nudged for it afterwards.
+   */
+  answered?(escalation: Escalation): Promise<boolean>;
 };
 
 export type RunnerLog = (level: string, msg: string, extra?: Record<string, unknown>) => void;
@@ -184,6 +207,27 @@ export class EscalationRunner {
     summary: SweepSummary,
   ): Promise<void> {
     const at = new Date(this.#now());
+
+    // Before the clock. Somebody who answered must not then be nudged for it,
+    // and a handler that cannot tell simply does not implement this.
+    if (handler.answered) {
+      const asked = await attempt(() => handler.answered!(escalation));
+      if (asked.ok && asked.value) {
+        const settled = reduce(escalation, { type: "acknowledged" }, at, handler.ladder);
+        await this.#forget(settled.escalation);
+        summary.settled++;
+        return;
+      }
+      if (!asked.ok) {
+        // Not fatal and not an acknowledgement. Treated as "still waiting",
+        // which errs toward telling somebody rather than toward silence.
+        this.#log("error", "could not tell whether a reminder was answered", {
+          id: escalation.id,
+          err: asked.err,
+        });
+      }
+    }
+
     let step = reduce(escalation, { type: "elapsed" }, at, handler.ladder);
 
     if (step.action.kind === "speak") {
@@ -197,8 +241,17 @@ export class EscalationRunner {
         at,
         handler.ladder,
       );
-      if (outcome.ok && outcome.value.spoken) summary.spoken++;
-      else summary.withheld++;
+      if (outcome.ok && outcome.value.spoken) {
+        summary.spoken++;
+        const learned = outcome.value.payload;
+        if (learned) {
+          step = {
+            ...step,
+            escalation: { ...step.escalation, payload: { ...step.escalation.payload, ...learned } },
+            changed: true,
+          };
+        }
+      } else summary.withheld++;
     } else if (step.action.kind === "notify") {
       const outcome = await attempt(() => handler.notify(escalation));
       step = reduce(

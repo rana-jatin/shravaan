@@ -519,6 +519,36 @@ export function loadConfig() {
       maxPerUser: num("MEDICATION_MAX_PER_USER", 12),
     },
 
+    /**
+     * The daily check-in: ask once a day whether they are all right, and tell
+     * somebody if nobody answers at all.
+     *
+     * THE SAME MACHINE AS MEDICATION WEARING DIFFERENT COPY, with one real
+     * difference: a check-in is answered by the person SAYING ANYTHING. There
+     * is no confirm tool, because "yes I'm fine", "who is this", and a
+     * complaint about the weather are all the same answer to the only question
+     * being asked, which is whether somebody is there and talking.
+     *
+     * ⚠ IT IS NOT A HEALTH CHECK AND MUST NOT BECOME ONE. Nothing reads what
+     * they said, scores it, or reports it. The device learns exactly one bit —
+     * somebody responded — and the family is told only when that bit is
+     * missing. Anything more is a wellbeing assessment nobody consented to.
+     *
+     * Escalates to `EMERGENCY_CONTACTS`, like medication and with the same
+     * caveat about the two lists not really being the same question.
+     */
+    checkin: {
+      enabled: opt("CHECKIN_ENABLED", "false") === "true",
+      /**
+       * A slower ladder than medication, on purpose. A tablet has a window; a
+       * person who has not spoken yet this morning has not necessarily done
+       * anything wrong, and twenty minutes of quiet is not news.
+       */
+      nudgeAfterMinutes: num("CHECKIN_NUDGE_MINUTES", 20),
+      escalateAfterMinutes: num("CHECKIN_ESCALATE_MINUTES", 40),
+      abandonAfterMinutes: num("CHECKIN_ABANDON_MINUTES", 240),
+    },
+
     /** raise_alarm. Inert unless contacts AND a relay are configured. */
     emergency: {
       /**

@@ -468,10 +468,17 @@ export class Session {
       return { spoken: false, reason: "busy" };
     }
 
-    // Its own turn number. A reply shares a tid with the user turn it answers;
-    // this answers nothing, so borrowing the previous exchange's number would
-    // file it under a question that was never asked.
-    this.#state.turn_no += 1;
+    // `turn_no` IS NOT INCREMENTED, and that is load-bearing rather than an
+    // omission. It counts what the PERSON has said — every other increment is
+    // in `#onFinal` — and the daily check-in asks "have they answered" by
+    // watching it move. Counting our own unprompted speech would make one
+    // capability's reminder look like a reply to another's question, which is
+    // exactly what happened the first time a check-in and a medication
+    // reminder shared a conversation: the tablet prompt settled the check-in.
+    //
+    // The cost is that this utterance shares a tid with the exchange before it.
+    // Nothing correlates on tid across a proactive turn — no mem:writes event
+    // is emitted for one — so the shared number costs nothing real.
 
     this.#log("info", "proactive speech", {
       reason: utterance.reason,
