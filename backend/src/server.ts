@@ -34,9 +34,7 @@ import { pendingCopyReview } from "@sp-i/ai/copy/fillers.ts";
 import { Session } from "@sp-i/ai/orchestrator/session.ts";
 import { HoldingAudio } from "@sp-i/ai/audio/holding-audio.ts";
 import { buildMemory } from "./composition/memory.ts";
-import { registerTools } from "./composition/tools.ts";
-import { registerCalendars } from "./composition/calendars.ts";
-import { registerAlerting } from "./composition/alerting.ts";
+import { externalSummary, registerCapabilities } from "./composition/tools.ts";
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}): void {
   const line = { t: new Date().toISOString(), level, msg, ...extra };
@@ -56,9 +54,9 @@ export type ServerHandle = {
  * The matrix check comes first because a typo there is the one failure this
  * whole subsystem exists to prevent, and it is cheaper to find before anything
  * has opened a socket. Config next, since every builder below takes it. Then
- * memory, tools, and the two tool groups that need their own credentials — each
- * in a module under composition/, each returning what the boot log needs to
- * report rather than leaving server.ts to recompute it.
+ * memory, then the capabilities — one loop over `ai/src/capabilities`, each
+ * reporting what it registered rather than leaving server.ts to recompute it
+ * from config.
  *
  * This function was 500 lines of the same sequence written inline. The steps
  * have not changed; they are just nameable now, and reachable from a test
@@ -83,24 +81,18 @@ export function start(): ServerHandle {
   }
 
   const { store, memStream, longTerm, worker } = buildMemory(cfg, log);
-  const { tools, newsCategories } = registerTools(cfg, log);
-  const calendars = registerCalendars(tools, cfg, log);
-  const { alerter, contacts: alertContacts } = registerAlerting(tools, cfg, log);
+
+  // One loop over ai/src/capabilities. This used to be three calls into three
+  // differently-shaped composition modules, and the log below recomputed what
+  // they had done from six config flags — so it could disagree with what was
+  // actually registered. Each capability reports its own line now.
+  const capabilities = registerCapabilities(cfg, log);
+  const { tools } = capabilities;
 
   log("info", "tools registered", {
     count: tools.all().length,
     names: tools.all().map((t) => t.name),
-    external: {
-      music: cfg.music.enabled ? (cfg.music.youtubeApiKey ? "radio+song" : "radio only") : false,
-      calendars: calendars.sources,
-      calendar_writable: calendars.writable,
-      emergency: alerter ? alertContacts : false,
-      weather: cfg.weather.enabled,
-      news: newsCategories,
-      // Worth saying out loud at boot: this is the one hop that is not Sarvam
-      // and not in India. See the residency note in src/config/env.ts.
-      residency: cfg.weather.enabled ? "get_weather leaves India (Open-Meteo, EU)" : "all in-India",
-    },
+    external: externalSummary(capabilities.reports, { weatherEnabled: cfg.weather.enabled }),
     note: "sarvam-105b tool-calling verified 2026-08-29 — npm run verify:tools",
   });
 
@@ -167,9 +159,9 @@ export function start(): ServerHandle {
           tools,
           longTerm,
           holdingAudio,
-          // Null when unconfigured, which leaves the alarm path inert rather
+          // Absent when unconfigured, which leaves the alarm path inert rather
           // than half-working. See the boot log above.
-          ...(alerter ? { alerter } : {}),
+          ...capabilities.contributions,
           // fetchContext: wire your backend here. Without it, entitlement-gated
           // tools are withheld rather than offered unverified.
           uid: String(msg["uid"] ?? "anonymous"),
@@ -201,6 +193,10 @@ export function start(): ServerHandle {
     wss,
     shutdown() {
       worker.stop();
+      // Capability-owned timers — the radio catalogue refresh is the only one
+      // today. Unreferenced, so it never held the process open, but a test that
+      // starts two servers would otherwise leave the first one's interval live.
+      capabilities.dispose();
       // One last drain attempt. A buffered backlog dies with the process — that
       // is what "bounded in-process buffer" means, and it is stated plainly in
       // docs/adr/0008-degradation-policy.md rather than discovered.
