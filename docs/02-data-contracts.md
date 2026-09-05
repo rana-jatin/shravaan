@@ -483,6 +483,20 @@ that offers things and then withdraws them.
 **Deadlines are per call, not global.** A slow tool must not consume the whole turn budget.
 On breach: return the error result, speak the fallback, clear `sess:{sid}:pending`.
 
+**A tool may span turns, and its state is not in Redis.** `start_game` / `answer_game` /
+`end_game` ([ADR 0010](adr/0010-games-and-activities.md)) share a round that outlives the call
+that created it. It lives on the session object, not under `sess:{sid}:*`, and so does not
+survive a restart or a resume — deliberately: the round holds an answer key that must not be
+readable outside the process, a score that is explicitly not a record of the person, and
+nothing a later session is entitled to see. What survives is what the distiller writes about
+the session as a whole, like any other conversation.
+
+**A domain outcome is data, not an error.** `{repeated: false, reason: "nothing_said_yet"}` and
+`{judged: false, reason: "no_game_running"}` are successes. `ok: false` costs a
+`spoken_fallback_key`, and every key costs eleven translations — so modelling ordinary
+conversational outcomes as errors would let the translation backlog decide how many tools this
+product can carry.
+
 ---
 
 ## 6. Invalidation rules

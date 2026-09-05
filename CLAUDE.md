@@ -253,6 +253,14 @@ paraphrase the numbers away.
 - **`SYSTEM_PROMPT`'s tuning was measured on a model we no longer run.** The
   numbers in its comment are for `sarvam-105b`; we run
   `sarvam-105b-conversations`. Re-tuning is open work.
+- **A game round lives on the session object and nowhere else.** `start_game`
+  is the first tool that spans turns, and its state is deliberately not in
+  Redis: the round holds an answer key that must not leave the process and a
+  score that is explicitly not a record of the person. So "what did I score
+  yesterday" has no answer, by design. See `docs/adr/0010-games-and-activities.md`.
+- **Game results must never reach care signals.** A digit span looks enough
+  like a cognitive screening item that the line has to be written down. Nobody
+  consented to a test; it is a pastime.
 - **`frontend/` and `pi/` are wiring-proof starters, not products.** The
   frontend shows connection status against the device protocol; `pi_client`
   does the mic/speaker/sensor plumbing with mock fallbacks off-device. Neither
@@ -286,4 +294,4 @@ paraphrase the numbers away.
 | `docs/07-defect-register.md` | Known defects, with the mechanism for each. |
 | `docs/08-follow-ups.md` | What was deliberately not done, and why. |
 | `CONTRIBUTING.md` | Adding a capability, and the rules that go with it. |
-| `docs/adr/` | Nine decisions, including the ones still Proposed. |
+| `docs/adr/` | Ten decisions, including the ones still Proposed. |

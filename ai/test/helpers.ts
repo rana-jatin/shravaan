@@ -23,10 +23,17 @@ import type {
 } from "../src/providers/llm-client.ts";
 import type { TtsClient, TtsEvents, TtsOptions } from "../src/providers/tts-client.ts";
 import { Session, type DeviceLink, type SessionDeps } from "../src/orchestrator/session.ts";
+import { GameController } from "../src/domain/games/controller.ts";
 import type { SessionToolHost, ToolDefinition } from "../src/tools/types.ts";
 
 /** A SessionToolHost that records rather than acts. */
 export function fakeHost(over: Partial<SessionToolHost> = {}): SessionToolHost {
+  // Built ONCE per host, not once per `games()` call. A fresh controller each
+  // time would hand every call its own empty round, so `start_game` followed by
+  // `answer_game` would answer a game that was never started — the fake would
+  // be testing itself.
+  const games = new GameController();
+
   return {
     lastAgentReply: () => null,
     requestLanguage: (code) => ({ switched: true, language: code }),
@@ -40,6 +47,10 @@ export function fakeHost(over: Partial<SessionToolHost> = {}): SessionToolHost {
     timezone: () => "Asia/Kolkata",
     playMedia: () => {},
     stopMedia: () => {},
+    // A real one: it is pure, needs nothing, and a fake that always answered
+    // "no game running" would make every games test assert against the fake
+    // rather than against the round. Pass `{ games: () => … }` for a seeded one.
+    games: () => games,
     ...over,
   };
 }

@@ -15,6 +15,7 @@
 
 import type { FactKind, JsonContext, LanguageCode } from "@sp-i/shared/domain/types.ts";
 import type { MoodTrend } from "../domain/care-signals.ts";
+import type { GameHost } from "../domain/games/types.ts";
 
 /**
  * The slice of the live session a tool is allowed to touch.
@@ -83,6 +84,20 @@ export interface SessionToolHost {
 
   /** Stop whatever is playing. Safe to call when nothing is. */
   stopMedia(reason: string): void;
+
+  /**
+   * This conversation's game round — start it, answer it, end it.
+   *
+   * ONE ACCESSOR RATHER THAN FIVE FLAT METHODS, unlike `playMedia`/`stopMedia`
+   * next door. Media needs exactly two verbs and no state worth naming; a round
+   * is a small machine with an invariant of its own (the answer key must not
+   * leave it before the answer arrives), so it stays one object rather than
+   * being spread across this interface.
+   *
+   * Everything behind it is in-process and synchronous — no store, no provider,
+   * no clock. See src/domain/games/controller.ts.
+   */
+  games(): GameHost;
 }
 
 /**

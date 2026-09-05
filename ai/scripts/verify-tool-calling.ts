@@ -28,6 +28,7 @@ import { ToolRegistry } from "../src/tools/registry.ts";
 import { ToolExecutor } from "../src/tools/executor.ts";
 import { BUILTIN_TOOLS } from "../src/tools/builtin.ts";
 import { SYSTEM_PROMPT } from "../src/orchestrator/session.ts";
+import { GameController } from "../src/domain/games/controller.ts";
 import type { SessionToolHost } from "../src/tools/types.ts";
 
 const RAW = process.argv.includes("--raw");
@@ -331,6 +332,10 @@ async function endToEnd(): Promise<void> {
   const registry = new ToolRegistry();
   for (const spec of BUILTIN_TOOLS) registry.register(spec);
 
+  // The real one — it is pure and needs nothing, and the point of this probe is
+  // to drive the code the orchestrator drives rather than a stand-in.
+  const games = new GameController();
+
   const host: SessionToolHost = {
     lastAgentReply: () => "I said your tablets are at half past eight.",
     requestLanguage: (code) => ({ switched: true, language: code }),
@@ -344,6 +349,7 @@ async function endToEnd(): Promise<void> {
     timezone: () => "Asia/Kolkata",
     playMedia: (req) => console.log(`   [host] play ${req.source}: ${req.title}`),
     stopMedia: (reason) => console.log(`   [host] stop media (${reason})`),
+    games: () => games,
   };
 
   const executor = new ToolExecutor({

@@ -73,8 +73,9 @@ uvicorn app.main:app   # needs Postgres and Redis; see its README
 **Built:** Slices 1–4, 6, 7, and 8 (see [docs/04-milestones.md](docs/04-milestones.md)
 for the full plan) — device transport, Sarvam ASR/LLM/TTS, barge-in, the
 three-gate speakability check, the echo guard, working + long-term memory,
-function calling with 8 built-in tools, degradation handling, and opt-in
-Deepgram ASR standby and care-signal analysis.
+function calling with 11 zero-configuration tools (including brain games and
+trivia), degradation handling, and opt-in Deepgram ASR standby and care-signal
+analysis.
 
 **Not yet:** device-side echo cancellation (needs hardware), a wake word, a
 durable memory backend, a real multilingual embedder, and native review of
@@ -172,7 +173,14 @@ The list below is what hasn't been *built* yet:
   can't bridge scripts — a real multilingual embedder is needed before
   cross-language recall is trustworthy.
 - **Tool selection quality and end-to-end latency are unmeasured** — see
-  [docs/03-latency-budget.md](docs/03-latency-budget.md).
+  [docs/03-latency-budget.md](docs/03-latency-budget.md). The games took the
+  zero-configuration list from eight tools to eleven, which makes this the
+  first thing to measure rather than a background concern.
+- **The games' accept-lists are English and Devanagari only.** A trivia answer
+  given in one of the other nine scripts may be marked wrong — the same missing
+  multilingual embedder that limits `recall`. Sayings exist in `en-IN` and
+  `hi-IN` alone, and their phrasings need a native speaker's review before
+  shipping. See [ADR 0010](docs/adr/0010-games-and-activities.md).
 - **Degradation logic is only tested against simulated failures**, not a real
   outage.
 - **Nobody can set up a reminder except the person themselves.** Medication and
