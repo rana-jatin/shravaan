@@ -42,6 +42,22 @@ export const key = {
   userContext: (uid: string) => `user:${uid}:ctx`,
   userProfile: (uid: string) => `user:${uid}:profile`,
   memWrites: () => `mem:writes`,
+
+  /**
+   * Reminders. THE ONLY KEYS HERE WITH NO TTL, and the exception is the point:
+   * everything above is working memory, which is meant to go stale. A schedule
+   * is a standing instruction from a caregiver — "the blue tablet at eight" —
+   * and a key that quietly expired would turn a missed dose into a silence
+   * nobody could attribute to anything. Schedules end when someone deletes them.
+   *
+   * Split into `id:` and `index:` so no schedule id can ever collide with an
+   * index key, whatever a caller names one.
+   */
+  schedule: (id: string) => `sched:id:${id}`,
+  /** Every schedule id, for the ticker. */
+  scheduleIndex: () => `sched:index:all`,
+  /** One person's schedule ids. */
+  userScheduleIndex: (uid: string) => `sched:index:user:${uid}`,
 } as const;
 
 /** Every key belonging to a session, for teardown. */

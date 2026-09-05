@@ -83,10 +83,15 @@ export type Occurrence = {
 /**
  * Where schedules live between restarts.
  *
- * An interface here, implementations in step 10 — in-process and Redis, the
- * same pattern as SessionStore. Declared with the domain because the domain is
- * what defines the shape, and because a capability writing a reminder should
- * depend on this and never on Redis.
+ * An interface here; the implementations are in ./memory-schedule-store.ts and
+ * ./redis-schedule-store.ts, the same pattern as SessionStore. Declared with
+ * the domain because the domain is what defines the shape, and because a
+ * capability writing a reminder should depend on this and never on Redis.
+ *
+ * NOTE WHAT IS ABSENT: there is no TTL anywhere in this interface, and no
+ * `expire`. Every other store in this repo ages its data out. A standing
+ * instruction from a caregiver is not working memory and does not expire on
+ * its own — see the note beside the keys in shared/src/domain/redis-keys.ts.
  */
 export type ScheduleStore = {
   /** Everything for one person. */
@@ -98,3 +103,19 @@ export type ScheduleStore = {
   get(id: string): Promise<Schedule | null>;
   close?(): Promise<void>;
 };
+
+/**
+ * The order every implementation returns schedules in.
+ *
+ * Part of the contract, not a nicety. Redis sets are unordered and a Map is
+ * insertion-ordered, so without a rule stated once and applied by both, the
+ * shared contract suite would pass against memory and fail against Redis for a
+ * reason that has nothing to do with either being wrong.
+ *
+ * Oldest first, `id` breaking ties so two schedules created in the same
+ * millisecond still sort deterministically.
+ */
+export function compareSchedules(a: Schedule, b: Schedule): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}

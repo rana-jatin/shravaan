@@ -13,7 +13,8 @@ import { describe, it } from "node:test";
 
 import { registerCapabilities } from "../src/capabilities/register.ts";
 import { CAPABILITIES } from "../src/capabilities/catalogue.ts";
-import type { Capability, CapabilityReport } from "../src/capabilities/types.ts";
+import type { Capability, CapabilityContext, CapabilityReport } from "../src/capabilities/types.ts";
+import { MemoryScheduleStore } from "../src/scheduler/memory-schedule-store.ts";
 import { testConfig } from "./helpers.ts";
 
 /** A capability that records what it was asked to do. */
@@ -329,5 +330,75 @@ describe("the shipped capabilities", () => {
     for (const capability of CAPABILITIES) {
       assert.equal(typeof capability.isConfigured(cfg), "boolean", capability.name);
     }
+  });
+});
+
+describe("capabilities and the scheduler", () => {
+  it("collects an occurrence handler under the capability's own name", () => {
+    // Keyed by name because a Schedule stores a name: it outlives the process
+    // that created it, so it cannot hold a reference to the thing that runs it.
+    const wiring = registerCapabilities(testConfig(), undefined, [
+      fakeCapability("medication", {
+        register: (): CapabilityReport => ({
+          name: "medication",
+          registered: true,
+          tools: [],
+          detail: {},
+          onOccurrence: () => {},
+        }),
+      }),
+      fakeCapability("quiet"),
+    ]);
+
+    assert.deepEqual([...wiring.handlers.keys()], ["medication"]);
+  });
+
+  it("takes no handler from a capability this deployment did not configure", () => {
+    // The same rule as the tools: an unconfigured capability is not asked, so
+    // it cannot end up on the receiving end of a reminder it cannot serve.
+    const wiring = registerCapabilities(testConfig(), undefined, [
+      fakeCapability("medication", {
+        isConfigured: () => false,
+        register: (): CapabilityReport => ({
+          name: "medication",
+          registered: true,
+          tools: [],
+          detail: {},
+          onOccurrence: () => {},
+        }),
+      }),
+    ]);
+
+    assert.equal(wiring.handlers.size, 0);
+  });
+
+  it("hands every capability the schedule store composition chose", () => {
+    // The seam that keeps a capability from importing Redis to save a reminder.
+    const schedules = new MemoryScheduleStore();
+    const given: CapabilityContext[] = [];
+
+    registerCapabilities(
+      testConfig(),
+      undefined,
+      [
+        fakeCapability("medication", {
+          register: (_registry, ctx): CapabilityReport => {
+            given.push(ctx);
+            return { name: "medication", registered: true, tools: [], detail: {} };
+          },
+        }),
+      ],
+      schedules,
+    );
+
+    assert.equal(given[0]?.schedules, schedules);
+  });
+
+  it("registers no occurrence handlers at all today", () => {
+    // PINS THE CURRENT TRUTH: nothing in CAPABILITIES schedules anything yet,
+    // which is why composition starts no ticker. When medication reminders land
+    // this test fails, and that failure is the reminder to check the boot log
+    // says what it should.
+    assert.equal(registerCapabilities(testConfig()).handlers.size, 0);
   });
 });

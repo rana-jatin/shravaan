@@ -113,6 +113,9 @@ call ends ([01 §7](01-architecture.md#7-what-the-companion-shape-changes)).
 | `user:{uid}:ctx` | JSON string | **15 min absolute** | Not refreshed — invalidated |
 | `user:{uid}:profile` | JSON string | **7 days absolute** | Invalidated by the memory worker |
 | `mem:writes` | Stream | maxlen ~100k | Trimmed by the consumer |
+| `sched:id:{id}` | JSON string | **none** | Never expires — deleted explicitly |
+| `sched:index:all` | Set of ids | **none** | The ticker reads this |
+| `sched:index:user:{uid}` | Set of ids | **none** | One person's reminders |
 
 **`sess:*` = 30 min idle.** A companion pauses. Someone walks away mid-sentence and comes
 back. A call-length TTL would drop the thread exactly when continuity matters most. Thirty
@@ -128,6 +131,12 @@ invalidated explicitly when the memory worker commits new facts.
 
 **`sess:{sid}:lock`.** One turn at a time per session. Prevents a barge-in racing a
 completing turn into a corrupted window.
+
+**`sched:*` = no TTL, and it is the only exception in this table.** Everything above is
+working memory and is *meant* to go stale. A schedule is a standing instruction from a
+caregiver — "the blue tablet at eight" — and a key that quietly expired would turn a
+missed dose into a silence nobody could attribute to anything. Schedules end when someone
+deletes them. See [2.7](#27-sched--standing-reminders).
 
 ### 2.2 `sess:{sid}:state` — Hash
 
@@ -229,6 +238,50 @@ type Profile = {
 **Caps are deliberate.** This payload is in the prompt on every turn, so it is charged
 against both the latency budget and the token bill on each. Growth here is silent and
 compounding; the caps make it a design decision instead.
+
+### 2.7 `sched:*` — standing reminders
+
+Medication, check-ins, hydration. One shape, because they are one machine wearing three
+sets of copy.
+
+```ts
+type Schedule = {
+  id: string;
+  uid: string;
+  /** Which capability owns the payload and is handed the occurrence. */
+  capability: string;
+  /** Opaque to the scheduler: which medication, which question, which prompt. */
+  payload: Record<string, unknown>;
+  /** IANA zone. The USER'S, not the server's. */
+  timezone: string;
+  recurrence:
+    | { kind: "once"; at: string }                                    // RFC 3339
+    | { kind: "daily"; times: string[]; days?: number[] }             // "08:00", 0 = Sunday
+    | { kind: "interval"; everyMinutes: number;
+        window?: { from: string; to: string } };                      // defaults 08:00-22:00
+  /** Paused without being forgotten. A holiday is not a deletion. */
+  enabled: boolean;
+  createdAt: string;
+};
+```
+
+**The timezone is stored per schedule, not taken from the server.** A local 08:00 treated
+as UTC fires at 02:30 in Kolkata. Waking someone in the night is not a rounding error —
+it is what teaches them to unplug the device, and an unplugged device cannot raise an
+alarm either.
+
+**`capability` is a name, not a reference.** A schedule outlives the process that created
+it. A build that no longer runs that capability has no handler for it, and the ticker says
+so once rather than dispatching into nothing.
+
+**Two indexes rather than a `SCAN`.** The ticker reads every schedule on every tick, and a
+scan over a database shared with every session key would walk far more than it reads.
+Nothing spans the value and the two sets transactionally, so both reads tolerate an index
+entry with no schedule behind it and repair it in passing.
+
+**No adherence record lives here.** Whether a dose was actually taken belongs to the
+escalation state machine, and it is deliberately a separate contract. A schedule says what
+should be said and when; it is not a record of what a person did.
 
 ---
 

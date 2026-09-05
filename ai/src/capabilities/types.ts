@@ -32,6 +32,8 @@
 import type { Config } from "@sp-i/shared/config/env.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
 import type { EmergencyAlerter } from "../tools/emergency.ts";
+import type { ScheduleStore } from "../scheduler/types.ts";
+import type { OccurrenceHandler } from "../scheduler/ticker.ts";
 
 /** Structurally the logger `backend/server.ts` builds and hands down. */
 export type CapabilityLog = (level: string, msg: string, extra?: Record<string, unknown>) => void;
@@ -39,6 +41,14 @@ export type CapabilityLog = (level: string, msg: string, extra?: Record<string, 
 export type CapabilityContext = {
   cfg: Config;
   log: CapabilityLog;
+  /**
+   * Where a capability writes the reminders it wants back later.
+   *
+   * A SEAM, NOT A DEPENDENCY ON REDIS: composition decides whether this is the
+   * in-process store or the durable one, and a capability that schedules a
+   * medication is written the same way either side of that choice.
+   */
+  schedules: ScheduleStore;
 };
 
 /**
@@ -80,6 +90,21 @@ export type CapabilityReport = {
    * `register` creates means each wiring disposes of its own.
    */
   dispose?: () => void;
+
+  /**
+   * Called when one of this capability's schedules comes due.
+   *
+   * Matched to `Schedule.capability` by name, which is why a schedule stores a
+   * name and not a function: it outlives the process that created it. A build
+   * that no longer runs the capability simply has no handler, and the ticker
+   * says so once rather than dispatching into nothing.
+   *
+   * ON THE REPORT rather than on the Capability for the same reason `dispose`
+   * is: a Capability is a module-level singleton, and a handler closing over
+   * one registration's state must not be shared with another registration in
+   * the same process.
+   */
+  onOccurrence?: OccurrenceHandler;
 };
 
 /**

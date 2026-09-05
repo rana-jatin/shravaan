@@ -34,7 +34,8 @@ import { pendingCopyReview } from "@sp-i/ai/copy/fillers.ts";
 import { Session } from "@sp-i/ai/orchestrator/session.ts";
 import { HoldingAudio } from "@sp-i/ai/audio/holding-audio.ts";
 import { buildMemory } from "./composition/memory.ts";
-import { externalSummary, registerCapabilities } from "./composition/tools.ts";
+import { buildScheduleStore, startScheduler } from "./composition/scheduler.ts";
+import { CAPABILITIES, externalSummary, registerCapabilities } from "./composition/tools.ts";
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}): void {
   const line = { t: new Date().toISOString(), level, msg, ...extra };
@@ -82,11 +83,15 @@ export function start(): ServerHandle {
 
   const { store, memStream, longTerm, worker } = buildMemory(cfg, log);
 
+  // Before the capabilities, because a capability writes into it. Nothing is
+  // opened or started here — see composition/scheduler.ts.
+  const schedules = buildScheduleStore(cfg);
+
   // One loop over ai/src/capabilities. This used to be three calls into three
   // differently-shaped composition modules, and the log below recomputed what
   // they had done from six config flags — so it could disagree with what was
   // actually registered. Each capability reports its own line now.
-  const capabilities = registerCapabilities(cfg, log);
+  const capabilities = registerCapabilities(cfg, log, CAPABILITIES, schedules);
   const { tools } = capabilities;
 
   log("info", "tools registered", {
@@ -95,6 +100,10 @@ export function start(): ServerHandle {
     external: externalSummary(capabilities.reports, { weatherEnabled: cfg.weather.enabled }),
     note: "sarvam-105b tool-calling verified 2026-08-29 — npm run verify:tools",
   });
+
+  // After the capabilities, because it dispatches to them. Silent and inert
+  // until one of them registers an occurrence handler.
+  const scheduler = startScheduler(cfg, log, schedules, capabilities.handlers);
 
   // The apology for a Bulbul outage, rendered ahead of time — the one message
   // that cannot be synthesised, because synthesis is what broke.
@@ -197,6 +206,7 @@ export function start(): ServerHandle {
       // today. Unreferenced, so it never held the process open, but a test that
       // starts two servers would otherwise leave the first one's interval live.
       capabilities.dispose();
+      void scheduler.stop().catch(() => {});
       // One last drain attempt. A buffered backlog dies with the process — that
       // is what "bounded in-process buffer" means, and it is stated plainly in
       // docs/adr/0008-degradation-policy.md rather than discovered.
